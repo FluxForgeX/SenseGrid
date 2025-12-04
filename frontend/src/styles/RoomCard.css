@@ -1,0 +1,100 @@
+/* Mobile-first responsive room card styles */
+
+/* Desktop grid (3 columns) */
+.room-card__grid {
+  display: grid;
+  grid-template-columns: 1fr 220px;
+  gap: 1rem;
+  align-items: start;
+}
+
+.col-heading {
+  font-weight: 700;
+  margin-bottom: 0.5rem;
+  font-size: 0.875rem;
+}
+
+.room-card__sensor {
+  display: flex;
+  align-items: center;
+  padding: 0.4rem 0;
+}
+
+.room-card__action {
+  display: flex;
+  justify-content: flex-end;
+  align-items: center;
+  padding: 0.4rem 0;
+}
+
+.action-btn {
+  min-width: 72px;
+  min-height: 36px;
+  border-radius: 6px;
+  transition: all 150ms ease-out;
+}
+
+/* Ensure buttons are always clickable */
+.room-card__action,
+.room-card__action button {
+  pointer-events: auto;
+  z-index: 20;
+}
+
+.room-card__grid > * {
+  pointer-events: auto;
+}
+
+/* Tablet: 2 columns and stacked sensors */
+@media (max-width: 1024px) {
+  .room-card__grid {
+    grid-template-columns: 1fr;
+    gap: 0.5rem;
+  }
+}
+
+/* Mobile: single column with vertical sensor stack */
+@media (max-width: 768px) {
+  .room-card__grid {
+    grid-template-columns: 1fr;
+    gap: 0.75rem;
+  }
+
+  .room-card__sensor {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    padding: 0.75rem 0;
+    gap: 0.5rem;
+  }
+
+  .room-card__action {
+    justify-content: flex-start;
+    align-items: flex-start;
+    width: 100%;
+    padding: 0.5rem 0 1rem 0;
+    margin-top: 0.25rem;
+  }
+
+  .action-btn {
+    min-width: 64px;
+    min-height: 40px;
+    font-size: 0.875rem;
+    padding: 0.5rem 1rem;
+  }
+}
+
+/* Extra small mobile screens */
+@media (max-width: 640px) {
+  .room-card__sensor {
+    padding: 0.5rem 0;
+  }
+
+  .action-btn {
+    min-width: 60px;
+    min-height: 38px;
+    font-size: 0.8125rem;
+    padding: 0.5rem 0.875rem;
+  }
+}
+

@@ -1,0 +1,11 @@
+[
+  {
+    "roomId": "r1",
+    "roomName": "Living Room",
+    "homeId": "h1",
+    "deviceId": "d1",
+    "sensors": { "temperature": 24.3, "humidity": 45, "gas": 200, "flame": 0 },
+    "fanState": "OFF",
+    "lastSeen": 1699990000000
+  }
+]

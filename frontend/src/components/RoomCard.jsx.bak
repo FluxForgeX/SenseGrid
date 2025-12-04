@@ -1,0 +1,247 @@
+// src/components/RoomCard.jsx
+import React, { useState, useEffect, useRef } from 'react'
+import { FaTemperatureHigh, FaTint, FaFire, FaWind } from 'react-icons/fa'
+import { sendDeviceCommand, postRoomAction } from '../services/api'
+import { toast } from 'react-toastify'
+import offlineQueue from '../services/offlineQueue'
+import { MANUAL_OVERRIDE_TIMEOUT } from '../constants'
+import ActionToggle from './ActionToggle'
+import '../styles/RoomCard.css'
+
+/**
+ * Robust RoomCard
+ * - Keeps a local optimistic room state for UI
+ * - Merges incoming props instead of overwriting so optimistic updates persist
+ * - Uses refs for latest room values inside async flows
+ * - Returns Promise<boolean> from handleToggle (resolves quickly)
+ */
+export default function RoomCard({ room, socket, queuedCount = 0 }) {
+  // local copy of room state (kept for UI optimistic updates)
+  const [roomState, setRoomState] = useState(room || {})
+  const roomRef = useRef(room || {})
+  const roomStateRef = useRef(roomState)
+  // Only track queuedMap; ActionToggle manages its own loading state internally
+  const [queuedMap, setQueuedMap] = useState({}) // sensor -> boolean (queued on server/offline)
+
+  // keep refs in sync
+  useEffect(() => {
+    roomRef.current = room || {}
+  }, [room])
+
+  useEffect(() => {
+    roomStateRef.current = roomState
+  }, [roomState])
+
+  // Merge incoming room prop into local state rather than replacing (preserve optimistic fields)
+  useEffect(() => {
+    setRoomState(prev => {
+      if (!prev) {
+        const next = { ...(room || {}) }
+        roomStateRef.current = next
+        return next
+      }
+      // shallow merge but keep prev.actions/autoFlags/manualOverrideUntil if present
+      const next = {
+        ...prev,
+        ...(room || {}),
+        actions: { ...(prev.actions || {}), ...((room && room.actions) || {}) },
+        autoFlags: { ...(prev.autoFlags || {}), ...((room && room.autoFlags) || {}) }
+      }
+      roomStateRef.current = next
+      return next
+    })
+  }, [room])
+
+  // build queuedMap from room.queuedItems (server-side queue)
+  useEffect(() => {
+    const qm = {}
+    if (room?.queuedItems && Array.isArray(room.queuedItems)) {
+      room.queuedItems.forEach(i => {
+        const sensor = i?.command?.sensor
+        if (sensor) qm[sensor] = true
+      })
+    }
+    setQueuedMap(qm)
+  }, [room])
+
+  const manualTimer = useRef(null)
+
+  // helper label
+  function sensorsLabel(key) {
+    return ({ temperature: 'Temperature', humidity: 'Humidity', gas: 'Gas', flame: 'Flame' }[key] || key)
+  }
+
+  // stable sensors config for rendering
+  const sensors = [
+    { key: 'temperature', label: 'Temperature', icon: <FaTemperatureHigh />, value: roomState.sensors?.temperature, unit: '°C' },
+    { key: 'humidity', label: 'Humidity', icon: <FaTint />, value: roomState.sensors?.humidity, unit: '%' },
+    { key: 'gas', label: 'Gas', icon: <FaWind />, value: roomState.sensors?.gas, unit: '' },
+    { key: 'flame', label: 'Flame', icon: <FaFire />, value: roomState.sensors?.flame, unit: '' }
+  ]
+
+  /**
+   * handleToggle
+   * - sensor: 'temperature'|'humidity'|'gas'|'flame'
+   * - value: 'ON' | 'OFF' | any
+   *
+   * Returns Promise<boolean> (resolves quickly so UI toggles don't block)
+   */
+  async function handleToggle(sensor, value) {
+    // always use stable ids from incoming prop (roomRef) to avoid races if local state gets overwritten
+    const stableRoom = roomRef.current || {}
+    const roomId = stableRoom.roomId
+    const deviceId = stableRoom.deviceId
+    const homeId = stableRoom.homeId
+
+    // create command id
+    const cmdId = 'cmd_' + (typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : Math.random().toString(36).slice(2))
+    const command = { action: 'set', sensor, value, id: cmdId }
+
+    // record previous value to allow revert on error
+    const prevValue = roomStateRef.current?.actions?.[sensor] ?? 'OFF'
+
+    // optimistic UI
+    setRoomState(prev => {
+      const next = {
+        ...prev,
+        actions: { ...(prev.actions || {}), [sensor]: value },
+        manualOverrideUntil: Date.now() + MANUAL_OVERRIDE_TIMEOUT
+      }
+      roomStateRef.current = next
+      return next
+    })
+
+    // Note: ActionToggle manages its own loading state; we just track queued for UI
+    setQueuedMap(prev => ({ ...prev, [sensor]: false }))
+
+    // Return quickly to ActionToggle so it won't stay loading; continue actual delivery in background.
+    const immediateResolve = Promise.resolve(true)
+
+    ;(async () => {
+      try {
+        if (navigator.onLine) {
+          try {
+            // try server room-level endpoint first
+            await postRoomAction(roomId, command, homeId)
+            console.debug('[RoomCard] postRoomAction succeeded', { roomId, command })
+          } catch (err) {
+            console.warn('[RoomCard] postRoomAction failed, trying device endpoint', err && err.message)
+            // fallback to device-level endpoint
+            await sendDeviceCommand(deviceId, { action: 'set', target: sensor, value, id: cmdId, roomId }, homeId)
+            console.debug('[RoomCard] sendDeviceCommand succeeded', { deviceId, command })
+          }
+
+          // success: clear queued flag for that sensor
+          setQueuedMap(prev => ({ ...prev, [sensor]: false }))
+          toast.success(`${sensorsLabel(sensor)} set to ${value} (synced)`)
+        } else {
+          // offline: enqueue for background sync (offlineQueue should manage retries)
+          await offlineQueue.enqueue({
+            id: cmdId,
+            deviceId,
+            command,
+            homeId,
+            roomId,
+            createdAt: Date.now(),
+            retries: 0
+          })
+          setQueuedMap(prev => ({ ...prev, [sensor]: true }))
+          toast.info(`${sensorsLabel(sensor)} action queued (offline)`)
+          console.debug('[RoomCard] queued command for background sync', { id: cmdId })
+        }
+      } catch (err) {
+        // network or other error: revert optimistic UI (but only if still showing our optimistic value)
+        console.error('[RoomCard] action failed', err)
+
+        // Only revert if the optimistic value still equals the attempted value (avoids clobbering concurrent changes)
+        setRoomState(prev => {
+          const current = prev.actions?.[sensor]
+          if (current === value) {
+            // revert to previous or toggle OFF/ON fallback
+            const reverted = prevValue ?? (value === 'ON' ? 'OFF' : 'ON')
+            const next = { ...prev, actions: { ...(prev.actions || {}), [sensor]: reverted } }
+            roomStateRef.current = next
+            return next
+          }
+          return prev
+        })
+
+        // try to enqueue as fallback (best-effort)
+        try {
+          await offlineQueue.enqueue({
+            id: cmdId,
+            deviceId,
+            command,
+            homeId,
+            roomId,
+            createdAt: Date.now(),
+            retries: 0
+          })
+          setQueuedMap(prev => ({ ...prev, [sensor]: true }))
+          toast.info(`${sensorsLabel(sensor)} action queued after error`)
+        } catch (qerr) {
+          console.error('[RoomCard] failed to enqueue fallback', qerr)
+          toast.error(`${sensorsLabel(sensor)} action failed and could not be queued`)
+        }
+      }
+    })()
+
+    return immediateResolve
+  }
+
+  return (
+    <div className="bg-white rounded-lg shadow p-4">
+      <div className="flex items-center justify-between mb-3">
+        <div>
+          <div className="font-semibold">{roomState.roomName || 'Room'}</div>
+          <div className="text-xs text-gray-500">
+            Last: {roomState.lastSeen ? new Date(roomState.lastSeen).toLocaleTimeString() : '—'}
+          </div>
+        </div>
+      </div>
+
+      <div className="room-card__grid">
+        <div className="col-heading">Sensor</div>
+        <div className="col-heading text-right">Action</div>
+
+        {sensors.map(s => (
+          <React.Fragment key={s.key}>
+            <div className="room-card__sensor">
+              <div className="flex items-center gap-3">
+                <div className="text-sky-500">{s.icon}</div>
+                <div>
+                  <div className="text-sm font-medium">{s.label}</div>
+                  <div className="text-xs text-gray-500">
+                    {s.value ?? '—'}{s.unit ? ` ${s.unit}` : ''}
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <div className="room-card__action">
+              <ActionToggle
+                // NOTE: ActionToggle should call onToggle(sensor, newValue) and optionally await a returned Promise
+                roomId={roomRef.current.roomId}
+                sensor={s.key}
+                state={roomState.actions?.[s.key] || 'OFF'}
+                auto={roomState.autoFlags?.[s.key]}
+                queued={!!queuedMap[s.key]}
+                onToggle={(sensor, newValue) => {
+                  // Ensure we return a Promise<boolean> to the caller.
+                  try {
+                    const result = handleToggle(sensor, newValue)
+                    // result is a Promise<boolean> - return it directly
+                    return result
+                  } catch (err) {
+                    console.error('[RoomCard] onToggle threw', err)
+                    return Promise.resolve(false)
+                  }
+                }}
+              />
+            </div>
+          </React.Fragment>
+        ))}
+      </div>
+    </div>
+  )
+}
