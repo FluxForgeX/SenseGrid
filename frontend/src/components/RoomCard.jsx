@@ -10,7 +10,7 @@
  */
 
 import React, { useState, useEffect, useRef } from 'react'
-import { FaTemperatureHigh, FaTint, FaFire, FaWind, FaTrash } from 'react-icons/fa'
+import { FaTemperatureHigh, FaTint, FaFire, FaWind, FaTrash, FaEdit, FaCheck, FaTimes } from 'react-icons/fa'
 import { sendDeviceCommand, postRoomAction } from '../services/api'
 import { toast } from 'react-toastify'
 import offlineQueue from '../services/offlineQueue'
@@ -22,6 +22,10 @@ import useStore from '../store/useStore'
 
 export default function RoomCard({ room, socket, queuedItems = [] }) {
   const removeRoom = useStore(state => state.removeRoom)
+  const updateRoom = useStore(state => state.updateRoom)
+  const [isEditing, setIsEditing] = useState(false)
+  const [editName, setEditName] = useState(room.roomName || '')
+
   // Local optimistic state
   const [roomState, setRoomState] = useState(room || {})
   const roomRef = useRef(room)
@@ -198,6 +202,13 @@ export default function RoomCard({ room, socket, queuedItems = [] }) {
     return result
   }
 
+  const handleSave = () => {
+    if (editName.trim()) {
+      updateRoom(room.roomId, { roomName: editName })
+      setIsEditing(false)
+    }
+  }
+
   return (
     <motion.div 
       initial={{ opacity: 0, y: 20 }}
@@ -205,19 +216,45 @@ export default function RoomCard({ room, socket, queuedItems = [] }) {
       whileHover={{ y: -5 }}
       className="bg-white rounded-lg shadow-md p-4 sm:p-6 transition-all duration-200 relative group"
     >
-      <button 
-        onClick={() => removeRoom(room.roomId)}
-        className="absolute top-4 right-4 text-gray-400 hover:text-red-500 opacity-0 group-hover:opacity-100 transition z-10"
-        title="Remove Room"
-      >
-        <FaTrash />
-      </button>
+      <div className="absolute top-4 right-4 flex gap-2 opacity-0 group-hover:opacity-100 transition z-10">
+        <button 
+          onClick={() => {
+            setEditName(roomState.roomName)
+            setIsEditing(true)
+          }}
+          className="text-gray-400 hover:text-teal-500"
+          title="Edit Room"
+        >
+          <FaEdit />
+        </button>
+        <button 
+          onClick={() => removeRoom(room.roomId)}
+          className="text-gray-400 hover:text-red-500"
+          title="Remove Room"
+        >
+          <FaTrash />
+        </button>
+      </div>
 
       {/* Room header */}
-      <div className="mb-4 sm:mb-6">
-        <h2 className="text-lg sm:text-xl font-semibold text-gray-900">
-          {roomState.roomName || 'Room'}
-        </h2>
+      <div className="mb-4 sm:mb-6 pr-16">
+        {isEditing ? (
+          <div className="flex items-center gap-2">
+            <input 
+              type="text" 
+              value={editName}
+              onChange={(e) => setEditName(e.target.value)}
+              className="border border-gray-300 rounded px-2 py-1 text-sm w-full focus:outline-none focus:border-teal-500"
+              autoFocus
+            />
+            <button onClick={handleSave} className="text-green-500 hover:text-green-600"><FaCheck /></button>
+            <button onClick={() => setIsEditing(false)} className="text-red-500 hover:text-red-600"><FaTimes /></button>
+          </div>
+        ) : (
+          <h2 className="text-lg sm:text-xl font-semibold text-gray-900 truncate">
+            {roomState.roomName || 'Room'}
+          </h2>
+        )}
         <p className="text-xs sm:text-sm text-gray-500 mt-1">
           Last seen: {roomState.lastSeen ? new Date(roomState.lastSeen).toLocaleTimeString() : 'never'}
         </p>
