@@ -10,15 +10,18 @@
  */
 
 import React, { useState, useEffect, useRef } from 'react'
-import { FaTemperatureHigh, FaTint, FaFire, FaWind } from 'react-icons/fa'
+import { FaTemperatureHigh, FaTint, FaFire, FaWind, FaTrash } from 'react-icons/fa'
 import { sendDeviceCommand, postRoomAction } from '../services/api'
 import { toast } from 'react-toastify'
 import offlineQueue from '../services/offlineQueue'
 import { MANUAL_OVERRIDE_TIMEOUT } from '../constants'
 import ActionToggle from './ActionToggle'
 import '../styles/RoomCard.css'
+import { motion } from 'framer-motion'
+import useStore from '../store/useStore'
 
 export default function RoomCard({ room, socket, queuedItems = [] }) {
+  const removeRoom = useStore(state => state.removeRoom)
   // Local optimistic state
   const [roomState, setRoomState] = useState(room || {})
   const roomRef = useRef(room)
@@ -196,7 +199,20 @@ export default function RoomCard({ room, socket, queuedItems = [] }) {
   }
 
   return (
-    <div className="bg-white rounded-lg shadow-md p-4 sm:p-6 transition-all duration-200">
+    <motion.div 
+      initial={{ opacity: 0, y: 20 }}
+      animate={{ opacity: 1, y: 0 }}
+      whileHover={{ y: -5 }}
+      className="bg-white rounded-lg shadow-md p-4 sm:p-6 transition-all duration-200 relative group"
+    >
+      <button 
+        onClick={() => removeRoom(room.roomId)}
+        className="absolute top-4 right-4 text-gray-400 hover:text-red-500 opacity-0 group-hover:opacity-100 transition z-10"
+        title="Remove Room"
+      >
+        <FaTrash />
+      </button>
+
       {/* Room header */}
       <div className="mb-4 sm:mb-6">
         <h2 className="text-lg sm:text-xl font-semibold text-gray-900">
@@ -240,6 +256,6 @@ export default function RoomCard({ room, socket, queuedItems = [] }) {
           </div>
         ))}
       </div>
-    </div>
+    </motion.div>
   )
 }

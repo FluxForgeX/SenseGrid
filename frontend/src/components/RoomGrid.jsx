@@ -4,8 +4,10 @@ import { fetchRooms, sendDeviceCommand } from '../services/api'
 import { useSocket } from '../services/socket'
 import evaluateAutoActions from '../hooks/useAutoActions'
 import offlineQueue from '../services/offlineQueue'
+import useStore from '../store/useStore'
 
 export default function RoomGrid({ apiBase }) {
+  const { rooms: storeRooms } = useStore()
   const [rooms, setRooms] = useState([])
   const socket = useSocket()
   const roomsRef = useRef(rooms)
@@ -14,61 +16,46 @@ export default function RoomGrid({ apiBase }) {
   useEffect(() => {
     let mounted = true
     async function load() {
-      try {
-        const data = await fetchRooms()
-        if (mounted) {
-          const enriched = data.map(r => ({ ...r, autoActivated: false, pending: false, queued: false, manualOverrideUntil: 0 }))
-          setRooms(enriched)
-          // evaluate auto actions on initial load
-          enriched.forEach(r => {
-            // fire-and-forget
-            evaluateAutoActions(r, null, sendDeviceCommand, (roomId, patch) => {
-              setRooms(cur => cur.map(x => x.roomId === roomId ? { ...x, ...patch } : x))
-            })
-          })
-          // compute initial queued counts and per-device queued items
-          try {
-            const allQueued = await offlineQueue.list()
-            const counts = {}
-            const byDevice = {}
-            allQueued.forEach(q => {
-              counts[q.deviceId] = (counts[q.deviceId] || 0) + 1
-              byDevice[q.deviceId] = byDevice[q.deviceId] || []
-              byDevice[q.deviceId].push(q)
-            })
-            setRooms(cur => cur.map(r => ({ ...r, queued: (counts[r.deviceId] || 0), queuedItems: byDevice[r.deviceId] || [] })))
-          } catch (e) {
-            console.debug('offlineQueue list failed', e)
-          }
-        }
-      } catch (e) {
-        console.error('Failed to load rooms', e)
-        // fallback mock
-        if (mounted) {
-          const mocks = getMockRooms()
-          setRooms(mocks)
-          mocks.forEach(r => evaluateAutoActions(r, null, sendDeviceCommand, (roomId, patch) => {
+      if (storeRooms && storeRooms.length > 0) {
+        const enriched = storeRooms.map(r => ({ 
+          ...r, 
+          autoActivated: false, 
+          pending: false, 
+          queued: false, 
+          manualOverrideUntil: 0,
+          sensors: r.sensors || { temperature: 0, humidity: 0, gas: 0, flame: 0 }
+        }))
+        setRooms(enriched)
+        
+        // evaluate auto actions
+        enriched.forEach(r => {
+          evaluateAutoActions(r, null, sendDeviceCommand, (roomId, patch) => {
             setRooms(cur => cur.map(x => x.roomId === roomId ? { ...x, ...patch } : x))
-          }))
-          // update queued counts and items for mocks
-          try {
-            const allQueued = await offlineQueue.list()
-            const counts = {}
-            const byDevice = {}
-            allQueued.forEach(q => {
-              counts[q.deviceId] = (counts[q.deviceId] || 0) + 1
-              byDevice[q.deviceId] = byDevice[q.deviceId] || []
-              byDevice[q.deviceId].push(q)
-            })
-            setRooms(cur => cur.map(r => ({ ...r, queued: (counts[r.deviceId] || 0), queuedItems: byDevice[r.deviceId] || [] })))
-          } catch (e) {
-            console.debug('offlineQueue list failed for mocks', e)
-          }
+          })
+        })
+
+        // compute queued
+        try {
+          const allQueued = await offlineQueue.list()
+          const counts = {}
+          const byDevice = {}
+          allQueued.forEach(q => {
+            counts[q.deviceId] = (counts[q.deviceId] || 0) + 1
+            byDevice[q.deviceId] = byDevice[q.deviceId] || []
+            byDevice[q.deviceId].push(q)
+          })
+          setRooms(cur => cur.map(r => ({ ...r, queued: (counts[r.deviceId] || 0), queuedItems: byDevice[r.deviceId] || [] })))
+        } catch (e) {
+          console.debug('offlineQueue list failed', e)
         }
+      } else {
+        // Fallback to mocks if store is empty
+        const mocks = getMockRooms()
+        setRooms(mocks)
       }
     }
     load()
-    // poll queued counts periodically to keep pending state accurate
+
     const interval = setInterval(async () => {
       try {
         const allQueued = await offlineQueue.list()
@@ -88,7 +75,7 @@ export default function RoomGrid({ apiBase }) {
       mounted = false
       clearInterval(interval)
     }
-  }, [apiBase])
+  }, [storeRooms])
 
   // Handle realtime device:update events
   useEffect(() => {
@@ -223,8 +210,7 @@ function getMockRooms() {
       pending: false,
       queued: false,
       manualOverrideUntil: 0
-    }
-    ,
+    },
     {
       roomId: 'r6',
       roomName: 'Garage',
@@ -251,7 +237,6 @@ function getMockRooms() {
       queued: false,
       manualOverrideUntil: 0
     },
-    
   ]
 }
 

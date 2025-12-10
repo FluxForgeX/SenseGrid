@@ -1,28 +1,35 @@
 import React from 'react'
-import RoomGrid from './components/RoomGrid'
-import NotificationBell from './components/NotificationBell'
-import useOnlineStatus from './hooks/useOnlineStatus'
+import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom'
+import LandingPage from './pages/LandingPage'
+import LoginPage from './pages/LoginPage'
+import RegisterPage from './pages/RegisterPage'
+import OnboardingPage from './pages/OnboardingPage'
+import Dashboard from './pages/Dashboard'
+import useStore from './store/useStore'
 
-const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:8000/api'
+const ProtectedRoute = ({ children }) => {
+  const isAuthenticated = useStore(state => state.isAuthenticated)
+  return isAuthenticated ? children : <Navigate to="/login" />
+}
 
 export default function App() {
-  const online = useOnlineStatus()
-
   return (
-    <div className="min-h-screen bg-gray-50 text-gray-900">
-      <header className="bg-white shadow">
-        <div className="max-w-7xl mx-auto px-4 py-4 flex items-center justify-between">
-          <h1 className="text-xl font-semibold">SenseGrid</h1>
-          <div className="flex items-center space-x-4">
-            <div className="text-sm">{online ? <span className="text-green-600">Online</span> : <span className="text-red-500">Offline</span>}</div>
-            <NotificationBell />
-          </div>
-        </div>
-      </header>
-
-      <main className="max-w-7xl mx-auto p-4">
-        <RoomGrid apiBase={API_BASE} />
-      </main>
-    </div>
+    <BrowserRouter>
+      <Routes>
+        <Route path="/" element={<LandingPage />} />
+        <Route path="/login" element={<LoginPage />} />
+        <Route path="/register" element={<RegisterPage />} />
+        <Route path="/onboarding" element={
+          <ProtectedRoute>
+            <OnboardingPage />
+          </ProtectedRoute>
+        } />
+        <Route path="/dashboard" element={
+          <ProtectedRoute>
+            <Dashboard />
+          </ProtectedRoute>
+        } />
+      </Routes>
+    </BrowserRouter>
   )
 }
