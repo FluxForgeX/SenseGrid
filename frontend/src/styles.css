@@ -56,20 +56,30 @@ button, a {
   outline-offset: 2px;
 }
 
-/* Toast accessibility */
+/* Toast accessibility - ensure visibility */
+.Toastify__toast-container {
+  z-index: 99999 !important;
+}
+
 .Toastify__toast {
   min-height: 64px;
   font-size: 0.875rem;
+  border-radius: 8px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
 }
 
 .Toastify__toast--success {
-  background-color: #10b981;
+  background-color: #10b981 !important;
 }
 
 .Toastify__toast--error {
-  background-color: #ef4444;
+  background-color: #ef4444 !important;
 }
 
 .Toastify__toast--info {
-  background-color: #3b82f6;
+  background-color: #3b82f6 !important;
+}
+
+.Toastify__toast--warning {
+  background-color: #f59e0b !important;
 }

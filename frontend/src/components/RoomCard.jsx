@@ -23,6 +23,7 @@ import useStore from '../store/useStore'
 export default function RoomCard({ room, socket, queuedItems = [] }) {
   const removeRoom = useStore(state => state.removeRoom)
   const updateRoom = useStore(state => state.updateRoom)
+  const updateRoomAction = useStore(state => state.updateRoomAction)
   const [isEditing, setIsEditing] = useState(false)
   const [editName, setEditName] = useState(room.roomName || '')
 
@@ -44,13 +45,35 @@ export default function RoomCard({ room, socket, queuedItems = [] }) {
   }, [roomState])
 
   // Merge incoming room prop (preserve optimistic fields)
+  // Only update if room data actually changed (not just reference)
+  const prevRoomRef = useRef(null)
   useEffect(() => {
+    // Skip if room data hasn't meaningfully changed
+    const prevRoom = prevRoomRef.current
+    if (prevRoom && room) {
+      // Only update sensors and basic props, NOT actions (to preserve optimistic state)
+      const sensorsChanged = JSON.stringify(prevRoom.sensors) !== JSON.stringify(room.sensors)
+      const lastSeenChanged = prevRoom.lastSeen !== room.lastSeen
+      
+      if (!sensorsChanged && !lastSeenChanged) {
+        // No meaningful change, skip update to preserve optimistic actions
+        return
+      }
+    }
+    
+    prevRoomRef.current = room
+    
     setRoomState(prev => {
       if (!prev) return { ...(room || {}) }
+      // Preserve local actions state (optimistic updates) - only update sensors from server
       return {
         ...prev,
-        ...(room || {}),
-        actions: { ...(prev.actions || {}), ...((room && room.actions) || {}) },
+        sensors: { ...(prev.sensors || {}), ...((room && room.sensors) || {}) },
+        roomName: room?.roomName || prev.roomName,
+        deviceId: room?.deviceId || prev.deviceId,
+        roomId: room?.roomId || prev.roomId,
+        lastSeen: room?.lastSeen || prev.lastSeen,
+        // Keep local actions unless server has newer data
         autoFlags: { ...(prev.autoFlags || {}), ...((room && room.autoFlags) || {}) }
       }
     })
@@ -123,12 +146,15 @@ export default function RoomCard({ room, socket, queuedItems = [] }) {
     // Record previous for revert
     const prevValue = roomStateRef.current?.actions?.[sensor] ?? 'OFF'
 
-    // Optimistic UI
+    // Optimistic UI - update local state
     setRoomState(prev => ({
       ...prev,
       actions: { ...(prev.actions || {}), [sensor]: value },
       manualOverrideUntil: Date.now() + MANUAL_OVERRIDE_TIMEOUT
     }))
+    
+    // Also update Zustand store immediately (optimistic)
+    updateRoomAction(roomId, sensor, value)
 
     // Immediately resolve for ActionToggle
     const result = Promise.resolve(true)
@@ -147,9 +173,9 @@ export default function RoomCard({ room, socket, queuedItems = [] }) {
             console.debug('[RoomCard] sendDeviceCommand succeeded')
           }
 
-          // Clear queued state
+          // Clear queued state - action synced successfully
           setQueuedMap(prev => ({ ...prev, [sensor]: false }))
-          toast.success(`${sensorsLabel(sensor)} set to ${value} (synced)`)
+          toast.success(`${sensorsLabel(sensor)} set to ${value}`)
         } else {
           // Offline - enqueue
           await offlineQueue.enqueue({
@@ -162,7 +188,7 @@ export default function RoomCard({ room, socket, queuedItems = [] }) {
             retries: 0
           })
           setQueuedMap(prev => ({ ...prev, [sensor]: true }))
-          toast.info(`${sensorsLabel(sensor)} action queued (offline)`)
+          toast.info(`${sensorsLabel(sensor)} queued (offline)`)
         }
       } catch (err) {
         console.error('[RoomCard] action failed', err)
@@ -171,6 +197,8 @@ export default function RoomCard({ room, socket, queuedItems = [] }) {
         setRoomState(prev => {
           const current = prev.actions?.[sensor]
           if (current === value) {
+            // Also revert in store
+            updateRoomAction(roomId, sensor, prevValue)
             return {
               ...prev,
               actions: { ...(prev.actions || {}), [sensor]: prevValue }
@@ -190,11 +218,17 @@ export default function RoomCard({ room, socket, queuedItems = [] }) {
             createdAt: Date.now(),
             retries: 0
           })
+          // Restore optimistic state since we queued it
+          setRoomState(prev => ({
+            ...prev,
+            actions: { ...(prev.actions || {}), [sensor]: value }
+          }))
+          updateRoomAction(roomId, sensor, value)
           setQueuedMap(prev => ({ ...prev, [sensor]: true }))
-          toast.info(`${sensorsLabel(sensor)} action queued after error`)
+          toast.info(`${sensorsLabel(sensor)} queued`)
         } catch (qerr) {
           console.error('[RoomCard] failed to enqueue', qerr)
-          toast.error(`${sensorsLabel(sensor)} action failed`)
+          toast.error(`${sensorsLabel(sensor)} failed`)
         }
       }
     })()

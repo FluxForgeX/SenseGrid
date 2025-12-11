@@ -5,10 +5,15 @@ from pydantic import BaseModel
 from typing import Optional, Dict, List
 from datetime import datetime, timedelta
 from jose import JWTError, jwt
-from passlib.context import CryptContext
+import bcrypt
+from sqlalchemy.orm import Session
+import json
 import os
 from dotenv import load_dotenv
 import socketio
+
+# Import database models and utilities
+from database import User, Room as RoomDB, Alert as AlertDB, get_db, init_db
 
 # Load environment variables
 load_dotenv()
@@ -17,19 +22,18 @@ load_dotenv()
 JWT_SECRET = os.getenv("JWT_SECRET", "dev-secret-key-min-32-characters-long-for-hs256-algorithm")
 JWT_ALGORITHM = "HS256"
 JWT_EXPIRATION_DAYS = 30
+
 # CORS Configuration
-# We use allow_origin_regex for Codespaces and allow_origins for local dev
-CORS_ORIGINS = os.getenv("CORS_ORIGINS", "http://localhost:5173,http://localhost:5174,https://congenial-waddle-v7q6v565x7ghppvg-5173.app.github.dev").split(",")
+# Supports: localhost, Codespaces, Raspberry Pi on local network
+DEFAULT_CORS = "http://localhost:5173,http://localhost:5174,http://127.0.0.1:5173,http://127.0.0.1:5174,http://localhost:3000"
+CORS_ORIGINS = os.getenv("CORS_ORIGINS", DEFAULT_CORS).split(",")
 
 # Security
-pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 security = HTTPBearer(auto_error=False)
 
 # Socket.IO setup
 # Allow all origins for Socket.IO in development to avoid CORS issues
 sio = socketio.AsyncServer(async_mode='asgi', cors_allowed_origins='*')
-# We will mount this later. Note: socketio_path="" because we mount at /socket.io
-socket_app = socketio.ASGIApp(sio, socketio_path="")
 
 # FastAPI app
 app = FastAPI(title='SenseGrid API', version='1.0.0')
@@ -37,19 +41,21 @@ app = FastAPI(title='SenseGrid API', version='1.0.0')
 app.add_middleware(
     CORSMiddleware,
     allow_origins=CORS_ORIGINS,
-    allow_origin_regex=r"https://.*\.app\.github\.dev",
+    allow_origin_regex=r"https://.*\.app\.github\.dev|http://192\.168\.\d+\.\d+:\d+|http://10\.\d+\.\d+\.\d+:\d+",
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# In-memory storage (replace with database in production)
-users_db: Dict[str, dict] = {}
-rooms_db: Dict[str, list] = {}  # userId -> [rooms]
-alerts_db: Dict[str, list] = {}  # homeId -> [alerts]
+# Initialize database tables on startup
+@app.on_event("startup")
+async def startup_event():
+    print("[startup] Initializing database...")
+    init_db()
+    print("[startup] Database initialized successfully")
 
 
-# Models
+# Pydantic Models for API
 class UserRegister(BaseModel):
     name: str
     email: str
@@ -67,7 +73,7 @@ class CommandPayload(BaseModel):
     roomId: Optional[str] = None
 
 
-class Room(BaseModel):
+class RoomCreate(BaseModel):
     roomId: str
     roomName: str
     deviceId: str
@@ -76,10 +82,10 @@ class Room(BaseModel):
     lastSeen: int
 
 
-class Alert(BaseModel):
+class AlertCreate(BaseModel):
     alertId: str
     homeId: str
-    snapshotUrl: str
+    snapshotUrl: Optional[str] = None
     ts: int
 
 
@@ -92,12 +98,18 @@ def hash_password(password: str) -> str:
     # bcrypt has a 72-byte limit, so truncate if necessary
     password_bytes = password.encode('utf-8')
     if len(password_bytes) > 72:
-        password = password_bytes[:72].decode('utf-8', errors='ignore')
-    return pwd_context.hash(password)
+        password_bytes = password_bytes[:72]
+    return bcrypt.hashpw(password_bytes, bcrypt.gensalt()).decode('utf-8')
 
 
 def verify_password(plain: str, hashed: str) -> bool:
-    return pwd_context.verify(plain, hashed)
+    plain_bytes = plain.encode('utf-8')
+    if len(plain_bytes) > 72:
+        plain_bytes = plain_bytes[:72]
+    try:
+        return bcrypt.checkpw(plain_bytes, hashed.encode('utf-8'))
+    except Exception:
+        return False
 
 
 def create_access_token(data: dict) -> str:
@@ -107,18 +119,51 @@ def create_access_token(data: dict) -> str:
     return jwt.encode(to_encode, JWT_SECRET, algorithm=JWT_ALGORITHM)
 
 
-async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(security)) -> Optional[dict]:
+def get_current_user(
+    credentials: HTTPAuthorizationCredentials = Depends(security),
+    db: Session = Depends(get_db)
+) -> User:
+    """Get current authenticated user from JWT token"""
     if not credentials:
         raise HTTPException(status_code=401, detail="Not authenticated")
     try:
         token = credentials.credentials
         payload = jwt.decode(token, JWT_SECRET, algorithms=[JWT_ALGORITHM])
         email: str = payload.get("sub")
-        if email is None or email not in users_db:
+        if email is None:
             raise HTTPException(status_code=401, detail="Invalid token")
-        return users_db[email]
+        
+        # Query user from database
+        user = db.query(User).filter(User.email == email).first()
+        if user is None:
+            raise HTTPException(status_code=401, detail="User not found")
+        return user
     except JWTError:
         raise HTTPException(status_code=401, detail="Invalid token")
+
+
+# Helper functions for JSON serialization
+def room_to_dict(room: RoomDB) -> dict:
+    """Convert Room DB model to API response dict"""
+    return {
+        "roomId": room.room_id,
+        "roomName": room.room_name,
+        "deviceId": room.device_id,
+        "sensors": json.loads(room.sensors) if room.sensors else {},
+        "actions": json.loads(room.actions) if room.actions else {},
+        "lastSeen": room.last_seen
+    }
+
+
+def alert_to_dict(alert: AlertDB) -> dict:
+    """Convert Alert DB model to API response dict"""
+    return {
+        "alertId": alert.alert_id,
+        "homeId": alert.home_id,
+        "snapshotUrl": alert.snapshot_url,
+        "ts": alert.timestamp,
+        "resolved": alert.resolved
+    }
 
 
 # Health check
@@ -133,21 +178,38 @@ api = APIRouter(prefix="/api")
 
 # Auth endpoints
 @api.post('/auth/register')
-async def register(user: UserRegister):
-    if user.email in users_db:
+async def register(user: UserRegister, db: Session = Depends(get_db)):
+    # Check if email already exists
+    existing_user = db.query(User).filter(User.email == user.email).first()
+    if existing_user:
         raise HTTPException(status_code=400, detail="Email already registered")
     
+    # Create new user
     hashed_pwd = hash_password(user.password)
-    user_data = {
-        "email": user.email,
-        "name": user.name,
-        "password": hashed_pwd,
-        "created_at": datetime.utcnow().isoformat()
-    }
-    users_db[user.email] = user_data
-    rooms_db[user.email] = []
+    db_user = User(
+        email=user.email,
+        name=user.name,
+        password=hashed_pwd
+    )
+    db.add(db_user)
+    db.commit()
+    db.refresh(db_user)
+    
+    # Create default room for new user
+    default_room = RoomDB(
+        room_id="living-room",
+        room_name="Living Room",
+        device_id="dev-living-room",
+        sensors=json.dumps({"temperature": 22, "humidity": 45, "gas": 0, "flame": 0}),
+        actions=json.dumps({"temperature": "OFF"}),
+        last_seen=int(datetime.utcnow().timestamp() * 1000),
+        user_id=db_user.id
+    )
+    db.add(default_room)
+    db.commit()
     
     token = create_access_token({"sub": user.email})
+    print(f"[register] New user created: {user.email}")
     return {
         "token": token,
         "user": {"name": user.name, "email": user.email}
@@ -155,122 +217,216 @@ async def register(user: UserRegister):
 
 
 @api.post('/auth/login')
-async def login(user: UserLogin):
-    if user.email not in users_db:
+async def login(user: UserLogin, db: Session = Depends(get_db)):
+    # Query user from database
+    db_user = db.query(User).filter(User.email == user.email).first()
+    if not db_user:
         raise HTTPException(status_code=401, detail="Invalid credentials")
     
-    stored_user = users_db[user.email]
-    if not verify_password(user.password, stored_user["password"]):
+    if not verify_password(user.password, db_user.password):
         raise HTTPException(status_code=401, detail="Invalid credentials")
     
     token = create_access_token({"sub": user.email})
+    print(f"[login] User logged in: {user.email}")
     return {
         "token": token,
-        "user": {"name": stored_user["name"], "email": stored_user["email"]}
+        "user": {"name": db_user.name, "email": db_user.email}
     }
 
 
 @api.get('/auth/me')
-async def get_me(current_user: dict = Depends(get_current_user)):
-    return {"name": current_user["name"], "email": current_user["email"]}
+async def get_me(current_user: User = Depends(get_current_user)):
+    return {"name": current_user.name, "email": current_user.email}
 
 
 # Room endpoints
 @api.get('/rooms')
-async def list_rooms(current_user: dict = Depends(get_current_user)):
-    user_rooms = rooms_db.get(current_user["email"], [])
-    if not user_rooms:
-        # Return default room for new users
-        default_room = {
-            "roomId": "living-room",
-            "roomName": "Living Room",
-            "deviceId": "dev-living-room",
-            "sensors": {"temperature": 22, "humidity": 45, "gas": 0, "flame": 0},
-            "actions": {"temperature": "OFF"},
-            "lastSeen": int(datetime.utcnow().timestamp() * 1000)
-        }
-        rooms_db[current_user["email"]] = [default_room]
-        return [default_room]
-    return user_rooms
+async def list_rooms(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    # Get user's rooms from database
+    rooms = db.query(RoomDB).filter(RoomDB.user_id == current_user.id).all()
+    
+    if not rooms:
+        # Create default room for new users
+        default_room = RoomDB(
+            room_id="living-room",
+            room_name="Living Room",
+            device_id="dev-living-room",
+            sensors=json.dumps({"temperature": 22, "humidity": 45, "gas": 0, "flame": 0}),
+            actions=json.dumps({"temperature": "OFF"}),
+            last_seen=int(datetime.utcnow().timestamp() * 1000),
+            user_id=current_user.id
+        )
+        db.add(default_room)
+        db.commit()
+        db.refresh(default_room)
+        rooms = [default_room]
+    
+    return [room_to_dict(room) for room in rooms]
 
 
 @api.post('/rooms')
-async def create_room(room: Room, current_user: dict = Depends(get_current_user)):
-    user_rooms = rooms_db.get(current_user["email"], [])
+async def create_room(
+    room: RoomCreate,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    # Check if room already exists for this user
+    existing_room = db.query(RoomDB).filter(
+        RoomDB.user_id == current_user.id,
+        RoomDB.room_id == room.roomId
+    ).first()
     
-    # Check if room already exists
-    if any(r["roomId"] == room.roomId for r in user_rooms):
+    if existing_room:
         raise HTTPException(status_code=400, detail="Room already exists")
     
-    room_data = room.dict()
-    user_rooms.append(room_data)
-    rooms_db[current_user["email"]] = user_rooms
+    # Create new room
+    db_room = RoomDB(
+        room_id=room.roomId,
+        room_name=room.roomName,
+        device_id=room.deviceId,
+        sensors=json.dumps(room.sensors),
+        actions=json.dumps(room.actions),
+        last_seen=room.lastSeen,
+        user_id=current_user.id
+    )
+    db.add(db_room)
+    db.commit()
+    db.refresh(db_room)
     
-    return room_data
+    print(f"[rooms] User {current_user.email} created room: {room.roomId}")
+    return room_to_dict(db_room)
 
 
 @api.post('/rooms/{room_id}/action')
-async def room_action(room_id: str, payload: CommandPayload, current_user: dict = Depends(get_current_user)):
+async def room_action(
+    room_id: str,
+    payload: CommandPayload,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
     cmd = payload.command or {}
-    print(f"[backend] User {current_user['email']} - room action for room={room_id} cmd={cmd}")
+    print(f"[backend] User {current_user.email} - room action for room={room_id} cmd={cmd}")
     
-    # Update room state in memory
-    user_rooms = rooms_db.get(current_user["email"], [])
-    for room in user_rooms:
-        if room["roomId"] == room_id:
-            sensor = cmd.get("sensor")
-            value = cmd.get("value")
-            if sensor and value:
-                room["actions"][sensor] = value
-            room["lastSeen"] = int(datetime.utcnow().timestamp() * 1000)
-            
-            # Emit socket update
-            await sio.emit('sensorUpdate', {
-                "roomId": room_id,
-                "deviceId": room.get("deviceId"),
-                "data": room
-            }, room=current_user["email"])
-            break
+    # Find room in database
+    room = db.query(RoomDB).filter(
+        RoomDB.user_id == current_user.id,
+        RoomDB.room_id == room_id
+    ).first()
+    
+    if room:
+        sensor = cmd.get("sensor")
+        value = cmd.get("value")
+        
+        if sensor and value:
+            # Update actions
+            actions = json.loads(room.actions) if room.actions else {}
+            actions[sensor] = value
+            room.actions = json.dumps(actions)
+        
+        room.last_seen = int(datetime.utcnow().timestamp() * 1000)
+        db.commit()
+        
+        # Emit socket update
+        await sio.emit('sensorUpdate', {
+            "roomId": room_id,
+            "deviceId": room.device_id,
+            "data": room_to_dict(room)
+        }, room=current_user.email)
     
     return {"status": "ok", "roomId": room_id, "received": cmd}
 
 
 @api.post('/devices/{device_id}/command')
-async def device_command(device_id: str, payload: CommandPayload, current_user: dict = Depends(get_current_user)):
+async def device_command(
+    device_id: str,
+    payload: CommandPayload,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
     cmd = payload.command or {}
-    print(f"[backend] User {current_user['email']} - device command for device={device_id} cmd={cmd}")
+    print(f"[backend] User {current_user.email} - device command for device={device_id} cmd={cmd}")
+    
+    # Find room by device_id
+    room = db.query(RoomDB).filter(
+        RoomDB.user_id == current_user.id,
+        RoomDB.device_id == device_id
+    ).first()
+    
+    if room:
+        sensor = cmd.get("sensor")
+        value = cmd.get("value")
+        
+        if sensor and value:
+            actions = json.loads(room.actions) if room.actions else {}
+            actions[sensor] = value
+            room.actions = json.dumps(actions)
+            room.last_seen = int(datetime.utcnow().timestamp() * 1000)
+            db.commit()
     
     return {"status": "ok", "deviceId": device_id, "received": cmd}
 
 
 @api.delete('/rooms/{room_id}')
-async def delete_room(room_id: str, current_user: dict = Depends(get_current_user)):
-    user_rooms = rooms_db.get(current_user["email"], [])
-    rooms_db[current_user["email"]] = [r for r in user_rooms if r["roomId"] != room_id]
-    print(f"[backend] User {current_user['email']} - deleted room {room_id}")
+async def delete_room(
+    room_id: str,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    # Find and delete room
+    room = db.query(RoomDB).filter(
+        RoomDB.user_id == current_user.id,
+        RoomDB.room_id == room_id
+    ).first()
+    
+    if room:
+        db.delete(room)
+        db.commit()
+        print(f"[backend] User {current_user.email} - deleted room {room_id}")
+    
     return {"status": "ok", "roomId": room_id}
 
 
 # Alert/Intruder endpoints
 @api.get('/alerts')
-async def list_alerts(homeId: Optional[str] = None, current_user: dict = Depends(get_current_user)):
+async def list_alerts(
+    homeId: Optional[str] = None,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    query = db.query(AlertDB).filter(
+        AlertDB.user_id == current_user.id,
+        AlertDB.resolved == False
+    )
+    
     if homeId:
-        return alerts_db.get(homeId, [])
-    # Return all alerts for user's homes
-    all_alerts = []
-    for alerts in alerts_db.values():
-        all_alerts.extend(alerts)
-    return all_alerts
+        query = query.filter(AlertDB.home_id == homeId)
+    
+    alerts = query.all()
+    return [alert_to_dict(alert) for alert in alerts]
 
 
 @api.post('/alerts/{alert_id}/action')
-async def alert_action(alert_id: str, payload: AlertAction, current_user: dict = Depends(get_current_user)):
+async def alert_action(
+    alert_id: str,
+    payload: AlertAction,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
     action = payload.action
-    print(f"[backend] User {current_user['email']} - alert action for alert={alert_id} action={action}")
+    print(f"[backend] User {current_user.email} - alert action for alert={alert_id} action={action}")
     
-    # Remove alert from all homes after action
-    for home_id, alerts in alerts_db.items():
-        alerts_db[home_id] = [a for a in alerts if a.get("alertId") != alert_id]
+    # Find and resolve alert
+    alert = db.query(AlertDB).filter(
+        AlertDB.user_id == current_user.id,
+        AlertDB.alert_id == alert_id
+    ).first()
+    
+    if alert:
+        alert.resolved = True
+        db.commit()
     
     # Emit socket event to notify clients
     await sio.emit('alert:processed', {
@@ -282,12 +438,23 @@ async def alert_action(alert_id: str, payload: AlertAction, current_user: dict =
 
 
 @api.post('/frontdoor/{alert_id}/{action}')
-async def frontdoor_action(alert_id: str, action: str, current_user: dict = Depends(get_current_user)):
-    print(f"[backend] User {current_user['email']} - frontdoor action for alert={alert_id} action={action}")
+async def frontdoor_action(
+    alert_id: str,
+    action: str,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    print(f"[backend] User {current_user.email} - frontdoor action for alert={alert_id} action={action}")
     
-    # Remove alert from all homes after action
-    for home_id, alerts in alerts_db.items():
-        alerts_db[home_id] = [a for a in alerts if a.get("alertId") != alert_id]
+    # Find and resolve alert
+    alert = db.query(AlertDB).filter(
+        AlertDB.user_id == current_user.id,
+        AlertDB.alert_id == alert_id
+    ).first()
+    
+    if alert:
+        alert.resolved = True
+        db.commit()
     
     # Emit socket event to notify clients
     await sio.emit('alert:processed', {
@@ -340,16 +507,13 @@ async def intruder_alert(sid, data):
     home_id = data.get('homeId')
     print(f"[socket.io] Intruder alert: {alert_id} for home {home_id}")
     
-    # Store alert
-    if home_id not in alerts_db:
-        alerts_db[home_id] = []
-    alerts_db[home_id].append(data)
-    
-    # Broadcast to all clients
+    # Note: For socket events, we'd need to associate with a user
+    # For now, just broadcast
     await sio.emit('intruder:alert', data)
 
 
 app.include_router(api)
 
-# Mount Socket.IO app
-app.mount("/socket.io", socket_app)
+# Wrap FastAPI with Socket.IO ASGI app
+# This ensures Socket.IO handles its own CORS and requests before they reach FastAPI
+app = socketio.ASGIApp(sio, other_asgi_app=app)

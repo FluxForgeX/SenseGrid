@@ -11,7 +11,19 @@ createRoot(document.getElementById('root')).render(
   <SocketProvider>
     <>
       <App />
-      <ToastContainer position="bottom-right" />
+      <ToastContainer 
+        position="top-right"
+        autoClose={3000}
+        hideProgressBar={false}
+        newestOnTop
+        closeOnClick
+        rtl={false}
+        pauseOnFocusLoss
+        draggable
+        pauseOnHover
+        theme="colored"
+        style={{ zIndex: 99999 }}
+      />
     </>
   </SocketProvider>
 )

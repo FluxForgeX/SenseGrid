@@ -17,6 +17,28 @@ client.interceptors.request.use((config) => {
   return config
 })
 
+// Handle 401 errors globally - clear auth state and redirect to login
+client.interceptors.response.use(
+  (response) => response,
+  (error) => {
+    if (error.response?.status === 401) {
+      // Token is invalid or user no longer exists in backend
+      // Clear local auth state
+      localStorage.removeItem('authToken')
+      // Clear Zustand persisted state
+      localStorage.removeItem('sensegrid-storage')
+      
+      // Only redirect if we're not already on auth pages
+      const currentPath = window.location.pathname
+      if (currentPath !== '/login' && currentPath !== '/register' && currentPath !== '/') {
+        console.warn('[api] 401 Unauthorized - redirecting to login')
+        window.location.href = '/login'
+      }
+    }
+    return Promise.reject(error)
+  }
+)
+
 // Auth API functions
 export async function registerUser(name, email, password) {
   const res = await client.post('/auth/register', { name, email, password })
