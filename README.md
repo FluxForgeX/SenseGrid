@@ -2,6 +2,31 @@
 
 A mobile-first, responsive React PWA for controlling IoT room sensors with real-time socket updates, offline support, and background sync.
 
+## 🚀 Quick Start (Localhost / Raspberry Pi)
+
+```bash
+# Clone and run setup
+git clone <your-repo-url>
+cd SenseGrid
+chmod +x setup.sh && ./setup.sh
+
+# OR manual setup:
+
+# Backend (Terminal 1)
+cd backend
+python -m venv .venv311
+source .venv311/bin/activate  # Linux/Mac/Pi
+pip install -r requirements.txt
+python -m uvicorn main:app --host 0.0.0.0 --port 8000
+
+# Frontend (Terminal 2)
+cd frontend
+npm install
+npm run dev
+```
+
+📖 **For Raspberry Pi deployment**, see [docs/raspberry-pi-setup.md](docs/raspberry-pi-setup.md)
+
 ## 🚀 Features
 
 - ✅ **Mobile-First Responsive** — Optimized for phones, tablets, and desktops
@@ -11,6 +36,7 @@ A mobile-first, responsive React PWA for controlling IoT room sensors with real-
 - ✅ **Touch-Friendly** — 44x44px minimum touch targets (WCAG compliant)
 - ✅ **Accessible** — ARIA labels, keyboard navigation, proper contrast
 - ✅ **Optimistic UI** — Instant visual feedback for user actions
+- ✅ **SQLite Database** — Persistent storage for users, rooms, and alerts
 
 ## 📋 Installation
 
@@ -23,7 +49,7 @@ A mobile-first, responsive React PWA for controlling IoT room sensors with real-
 ```bash
 cd frontend
 npm install
-npm run dev          # Start dev server (http://localhost:5174)
+npm run dev          # Start dev server (http://localhost:5173)
 npm run build        # Build for production
 npm run preview      # Preview production build
 ```
@@ -33,17 +59,31 @@ npm run preview      # Preview production build
 ```bash
 cd backend
 python -m venv .venv311
-.venv311\Scripts\Activate.ps1  # Windows PowerShell
-# or: source .venv311/bin/activate  # Linux/Mac
+source .venv311/bin/activate  # Linux/Mac
+# or: .venv311\Scripts\Activate.ps1  # Windows PowerShell
 pip install -r requirements.txt
-python -m uvicorn main:app --reload --host 127.0.0.1 --port 8000
+python -m uvicorn main:app --reload --host 0.0.0.0 --port 8000
+```
+
+### Environment Variables
+
+Create `.env` in `backend/`:
+```env
+JWT_SECRET=your-super-secret-key-min-32-chars
+CORS_ORIGINS=http://localhost:5173,http://192.168.1.100:5173
+```
+
+Create `.env` in `frontend/`:
+```env
+VITE_API_URL=http://localhost:8000
+VITE_SOCKET_URL=http://localhost:8000
 ```
 
 ## 🧪 Testing & QA Checklist
 
 ### 1. Online Toggle (Happy Path)
 ```
-✓ Open http://localhost:5174 in browser
+✓ Open http://localhost:5173 in browser
 ✓ Open DevTools Console (F12)
 ✓ Click "ON/OFF" button on any sensor
 ✓ Expect: Button instantly toggles → "... " loading state → final state
