@@ -11,7 +11,7 @@
 
 import React, { useState, useEffect, useRef } from 'react'
 import { FaTemperatureHigh, FaTint, FaFire, FaWind, FaTrash, FaEdit, FaCheck, FaTimes } from 'react-icons/fa'
-import { sendDeviceCommand, postRoomAction } from '../services/api'
+import { sendDeviceCommand, postRoomAction, deleteRoom } from '../services/api'
 import { toast } from 'react-toastify'
 import offlineQueue from '../services/offlineQueue'
 import { MANUAL_OVERRIDE_TIMEOUT } from '../constants'

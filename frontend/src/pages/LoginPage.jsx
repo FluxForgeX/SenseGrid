@@ -2,19 +2,33 @@ import React, { useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import useStore from '../store/useStore'
 import { motion } from 'framer-motion'
+import { loginUser } from '../services/api'
+import { toast } from 'react-toastify'
+import { saveAuthToIDB } from '../services/api'
 
 export default function LoginPage() {
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
+  const [loading, setLoading] = useState(false)
   const login = useStore(state => state.login)
   const navigate = useNavigate()
 
-  const handleSubmit = (e) => {
+  const handleSubmit = async (e) => {
     e.preventDefault()
-    // Mock login
-    if (email && password) {
-      login({ name: 'User', email })
+    setLoading(true)
+    
+    try {
+      const data = await loginUser(email, password)
+      localStorage.setItem('authToken', data.token)
+      await saveAuthToIDB(data.token)
+      login(data.user)
+      toast.success('Login successful!')
       navigate('/dashboard')
+    } catch (err) {
+      const message = err.response?.data?.detail || 'Login failed. Please check your credentials.'
+      toast.error(message)
+    } finally {
+      setLoading(false)
     }
   }
 
@@ -36,6 +50,7 @@ export default function LoginPage() {
               className="w-full bg-gray-700 text-white rounded-lg px-4 py-3 focus:outline-none focus:ring-2 focus:ring-teal-500 transition"
               placeholder="you@example.com"
               required
+              disabled={loading}
             />
           </div>
           <div>
@@ -47,10 +62,15 @@ export default function LoginPage() {
               className="w-full bg-gray-700 text-white rounded-lg px-4 py-3 focus:outline-none focus:ring-2 focus:ring-teal-500 transition"
               placeholder="••••••••"
               required
+              disabled={loading}
             />
           </div>
-          <button type="submit" className="w-full bg-teal-500 hover:bg-teal-600 text-white font-bold py-3 rounded-lg transition transform hover:scale-[1.02]">
-            Log In
+          <button 
+            type="submit" 
+            disabled={loading}
+            className="w-full bg-teal-500 hover:bg-teal-600 text-white font-bold py-3 rounded-lg transition transform hover:scale-[1.02] disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            {loading ? 'Logging in...' : 'Log In'}
           </button>
         </form>
         <p className="mt-6 text-center text-gray-400">

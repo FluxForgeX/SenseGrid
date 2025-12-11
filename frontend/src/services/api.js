@@ -3,7 +3,7 @@ import { openDB } from 'idb'
 
 const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:8000/api'
 
-const client = axios.create({ baseURL: API_BASE, timeout: 5000 }) // 5s timeout instead of 10s
+const client = axios.create({ baseURL: API_BASE, timeout: 5000 })
 
 
 // Inject Authorization header from localStorage for each request
@@ -17,8 +17,35 @@ client.interceptors.request.use((config) => {
   return config
 })
 
+// Auth API functions
+export async function registerUser(name, email, password) {
+  const res = await client.post('/auth/register', { name, email, password })
+  return res.data
+}
+
+export async function loginUser(email, password) {
+  const res = await client.post('/auth/login', { email, password })
+  return res.data
+}
+
+export async function getCurrentUser() {
+  const res = await client.get('/auth/me')
+  return res.data
+}
+
+// Room API functions
 export async function fetchRooms() {
   const res = await client.get('/rooms')
+  return res.data
+}
+
+export async function createRoom(roomData) {
+  const res = await client.post('/rooms', roomData)
+  return res.data
+}
+
+export async function deleteRoom(roomId) {
+  const res = await client.delete(`/rooms/${roomId}`)
   return res.data
 }
 

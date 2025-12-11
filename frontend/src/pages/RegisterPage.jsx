@@ -2,20 +2,34 @@ import React, { useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import useStore from '../store/useStore'
 import { motion } from 'framer-motion'
+import { registerUser } from '../services/api'
+import { toast } from 'react-toastify'
+import { saveAuthToIDB } from '../services/api'
 
 export default function RegisterPage() {
   const [name, setName] = useState('')
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
+  const [loading, setLoading] = useState(false)
   const login = useStore(state => state.login)
   const navigate = useNavigate()
 
-  const handleSubmit = (e) => {
+  const handleSubmit = async (e) => {
     e.preventDefault()
-    // Mock registration
-    if (name && email && password) {
-      login({ name, email })
-      navigate('/onboarding')
+    setLoading(true)
+    
+    try {
+      const data = await registerUser(name, email, password)
+      localStorage.setItem('authToken', data.token)
+      await saveAuthToIDB(data.token)
+      login(data.user)
+      toast.success('Account created successfully!')
+      navigate('/dashboard')
+    } catch (err) {
+      const message = err.response?.data?.detail || 'Registration failed. Please try again.'
+      toast.error(message)
+    } finally {
+      setLoading(false)
     }
   }
 
@@ -37,6 +51,7 @@ export default function RegisterPage() {
               className="w-full bg-gray-700 text-white rounded-lg px-4 py-3 focus:outline-none focus:ring-2 focus:ring-teal-500 transition"
               placeholder="John Doe"
               required
+              disabled={loading}
             />
           </div>
           <div>
@@ -48,6 +63,7 @@ export default function RegisterPage() {
               className="w-full bg-gray-700 text-white rounded-lg px-4 py-3 focus:outline-none focus:ring-2 focus:ring-teal-500 transition"
               placeholder="you@example.com"
               required
+              disabled={loading}
             />
           </div>
           <div>
@@ -59,10 +75,16 @@ export default function RegisterPage() {
               className="w-full bg-gray-700 text-white rounded-lg px-4 py-3 focus:outline-none focus:ring-2 focus:ring-teal-500 transition"
               placeholder="••••••••"
               required
+              disabled={loading}
+              minLength={6}
             />
           </div>
-          <button type="submit" className="w-full bg-teal-500 hover:bg-teal-600 text-white font-bold py-3 rounded-lg transition transform hover:scale-[1.02]">
-            Sign Up
+          <button 
+            type="submit" 
+            disabled={loading}
+            className="w-full bg-teal-500 hover:bg-teal-600 text-white font-bold py-3 rounded-lg transition transform hover:scale-[1.02] disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            {loading ? 'Creating account...' : 'Sign Up'}
           </button>
         </form>
         <p className="mt-6 text-center text-gray-400">

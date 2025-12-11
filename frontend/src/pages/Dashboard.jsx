@@ -1,4 +1,4 @@
-import React, { useState } from 'react'
+import React, { useState, useEffect } from 'react'
 import RoomGrid from '../components/RoomGrid'
 import NotificationBell from '../components/NotificationBell'
 import useOnlineStatus from '../hooks/useOnlineStatus'
@@ -6,33 +6,67 @@ import useStore from '../store/useStore'
 import { useNavigate } from 'react-router-dom'
 import { FaPlus, FaSignOutAlt } from 'react-icons/fa'
 import { motion, AnimatePresence } from 'framer-motion'
+import { fetchRooms, createRoom } from '../services/api'
+import { toast } from 'react-toastify'
 
 export default function Dashboard() {
   const online = useOnlineStatus()
-  const { user, logout, addRoom } = useStore()
+  const { user, logout, addRoom, setRooms } = useStore()
   const navigate = useNavigate()
   const [isAddingRoom, setIsAddingRoom] = useState(false)
   const [newRoomName, setNewRoomName] = useState('')
+  const [loading, setLoading] = useState(true)
+
+  useEffect(() => {
+    loadRooms()
+  }, [])
+
+  const loadRooms = async () => {
+    try {
+      const rooms = await fetchRooms()
+      setRooms(rooms)
+    } catch (err) {
+      console.error('Failed to fetch rooms:', err)
+      if (err.response?.status === 401) {
+        toast.error('Session expired. Please login again.')
+        logout()
+        navigate('/login')
+      }
+    } finally {
+      setLoading(false)
+    }
+  }
 
   const handleLogout = () => {
+    localStorage.removeItem('authToken')
     logout()
+    toast.info('Logged out successfully')
     navigate('/')
   }
 
-  const handleAddRoom = (e) => {
+  const handleAddRoom = async (e) => {
     e.preventDefault()
     if (newRoomName.trim()) {
       const id = newRoomName.toLowerCase().replace(/\s+/g, '-')
-      addRoom({
+      const roomData = {
         roomId: id,
         roomName: newRoomName,
         deviceId: `dev-${id}`,
         sensors: { temperature: 20, humidity: 50, gas: 0, flame: 0 },
         actions: { temperature: 'OFF' },
         lastSeen: Date.now()
-      })
-      setNewRoomName('')
-      setIsAddingRoom(false)
+      }
+      
+      try {
+        const createdRoom = await createRoom(roomData)
+        addRoom(createdRoom)
+        toast.success(`Room "${newRoomName}" added successfully!`)
+        setNewRoomName('')
+        setIsAddingRoom(false)
+      } catch (err) {
+        const message = err.response?.data?.detail || 'Failed to add room'
+        toast.error(message)
+      }
     }
   }
 
@@ -92,7 +126,14 @@ export default function Dashboard() {
           )}
         </AnimatePresence>
 
-        <RoomGrid />
+        {loading ? (
+          <div className="text-center py-12">
+            <div className="inline-block animate-spin rounded-full h-12 w-12 border-4 border-gray-300 border-t-teal-600"></div>
+            <p className="mt-4 text-gray-600">Loading rooms...</p>
+          </div>
+        ) : (
+          <RoomGrid />
+        )}
       </main>
     </div>
   )
