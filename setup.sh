@@ -113,6 +113,17 @@ setup_backend() {
             sed -i "s/your-super-secret-jwt-key-change-in-production-min-32-chars/$JWT_SECRET/" .env
         fi
         echo -e "${GREEN}✓ Generated secure JWT secret${NC}"
+        
+        # On Raspberry Pi, add local IP to CORS origins
+        LOCAL_IP=$(hostname -I 2>/dev/null | awk '{print $1}')
+        if [[ -n "$LOCAL_IP" && "$LOCAL_IP" != "127.0.0.1" ]]; then
+            echo -e "${YELLOW}Adding local IP ($LOCAL_IP) to CORS origins...${NC}"
+            if [[ "$OSTYPE" == "darwin"* ]]; then
+                sed -i '' "s|CORS_ORIGINS=|CORS_ORIGINS=http://$LOCAL_IP:5173,http://$LOCAL_IP:5174,|" .env
+            else
+                sed -i "s|CORS_ORIGINS=|CORS_ORIGINS=http://$LOCAL_IP:5173,http://$LOCAL_IP:5174,|" .env
+            fi
+        fi
     else
         echo -e "${YELLOW}⚠ .env already exists, skipping${NC}"
     fi
@@ -134,10 +145,30 @@ setup_frontend() {
     echo "Installing npm dependencies..."
     npm install
     
+    # Verify critical packages are installed
+    echo "Verifying required packages..."
+    if ! npm list react-router-dom &>/dev/null || ! npm list framer-motion &>/dev/null; then
+        echo "Installing missing packages..."
+        npm install react-router-dom framer-motion
+    fi
+    
     # Create .env if not exists
     if [[ ! -f ".env" ]]; then
         echo "Creating .env from template..."
         cp .env.example .env
+        
+        # On Raspberry Pi, update .env with local IP for network access
+        LOCAL_IP=$(hostname -I 2>/dev/null | awk '{print $1}')
+        if [[ -n "$LOCAL_IP" && "$LOCAL_IP" != "127.0.0.1" ]]; then
+            echo -e "${YELLOW}Configuring for network access (IP: $LOCAL_IP)...${NC}"
+            if [[ "$OSTYPE" == "darwin"* ]]; then
+                sed -i '' "s|VITE_API_URL=http://localhost:8000/api|VITE_API_URL=http://$LOCAL_IP:8000/api|" .env
+                sed -i '' "s|VITE_WS_URL=http://localhost:8000|VITE_WS_URL=http://$LOCAL_IP:8000|" .env
+            else
+                sed -i "s|VITE_API_URL=http://localhost:8000/api|VITE_API_URL=http://$LOCAL_IP:8000/api|" .env
+                sed -i "s|VITE_WS_URL=http://localhost:8000|VITE_WS_URL=http://$LOCAL_IP:8000|" .env
+            fi
+        fi
     else
         echo -e "${YELLOW}⚠ .env already exists, skipping${NC}"
     fi

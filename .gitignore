@@ -9,7 +9,7 @@ build/
 
 # Virtual Environments
 .venv/
-.venv311/
+.venv312/
 venv/
 env/
 
@@ -46,3 +46,14 @@ frontend/.turbo/
 
 # Misc
 README_OLD.md
+
+# YOLO Models (large files, user-specific)
+backend/models/*.pt
+backend/models/*.onnx
+backend/models/*.engine
+
+# Detection test files
+backend/snapshots/
+backend/*.jpg
+backend/*.png
+backend/*.jpeg

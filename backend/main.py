@@ -1,4 +1,4 @@
-from fastapi import FastAPI, APIRouter, HTTPException, Depends, status
+from fastapi import FastAPI, APIRouter, HTTPException, Depends, status, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from pydantic import BaseModel
@@ -11,6 +11,8 @@ import json
 import os
 from dotenv import load_dotenv
 import socketio
+import time
+import tempfile
 
 # Import database models and utilities
 from database import User, Room as RoomDB, Alert as AlertDB, get_db, init_db
@@ -463,6 +465,131 @@ async def frontdoor_action(
     })
     
     return {"status": "ok", "alertId": alert_id, "action": action}
+
+
+# Intruder detection endpoint
+@api.post('/intruder/detect')
+async def detect_intruder(
+    file: UploadFile = File(...),
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """
+    Upload an image for intruder detection.
+    
+    Uses configured detector (Roboflow Cloud API or local YOLO).
+    Detector type is set via DETECTOR_TYPE environment variable.
+    
+    This endpoint:
+    1. Accepts an uploaded image file
+    2. Runs inference using configured detector
+    3. Detects humans in the image
+    4. Creates an alert if humans are detected
+    5. Emits Socket.IO event to notify connected clients
+    
+    Returns:
+        {
+            "intruder_detected": bool,
+            "detections": [{"class": "Human", "confidence": 0.87, "bbox": {...}}],
+            "alert_id": str (if detected),
+            "detector_type": str
+        }
+    """
+    # Import and initialize detector lazily
+    try:
+        detector_type = os.getenv("DETECTOR_TYPE", "roboflow").lower()
+        
+        if detector_type in ("roboflow", "cloud"):
+            from services.roboflow_detector import get_roboflow_detector
+            detector = get_roboflow_detector()
+        elif detector_type in ("local", "yolo"):
+            from services.local_yolo_detector import get_detector
+            detector = get_detector()
+        else:
+            raise ValueError(f"Unknown DETECTOR_TYPE: {detector_type}. Use 'roboflow' or 'local'")
+            
+    except ImportError as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to import detector: {str(e)}. Check dependencies in requirements.txt"
+        )
+    except ValueError as e:
+        raise HTTPException(
+            status_code=500,
+            detail=str(e)
+        )
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to load intruder detector: {str(e)}"
+        )
+    
+    # Save uploaded file to temporary location
+    try:
+        # Create temp file with correct extension
+        suffix = os.path.splitext(file.filename)[1]
+        with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as temp_file:
+            temp_path = temp_file.name
+            content = await file.read()
+            temp_file.write(content)
+        
+        # Run detection using configured detector
+        detections = detector.detect(temp_path, conf=0.5)
+        
+    except Exception as e:
+        # Clean up temp file if it exists
+        if 'temp_path' in locals() and os.path.exists(temp_path):
+            os.remove(temp_path)
+        raise HTTPException(
+            status_code=400,
+            detail=f"Detection failed: {str(e)}"
+        )
+    finally:
+        # Always clean up temp file
+        if 'temp_path' in locals() and os.path.exists(temp_path):
+            os.remove(temp_path)
+    
+    # If humans detected, create alert and emit Socket.IO event
+    alert_id = None
+    if detections:
+        alert_id = f"alert-{int(time.time() * 1000)}"
+        
+        # Save alert to database
+        new_alert = AlertDB(
+            alert_id=alert_id,
+            home_id=current_user.email,  # Use email as home_id
+            snapshot_url=None,  # Could save image to storage and set URL here
+            timestamp=int(time.time() * 1000),
+            resolved=False,
+            user_id=current_user.id
+        )
+        db.add(new_alert)
+        db.commit()
+        
+        # Emit Socket.IO event to notify clients
+        await sio.emit('intruder:alert', {
+            "alertId": alert_id,
+            "homeId": current_user.email,
+            "confidence": detections[0]["confidence"],
+            "detectionCount": len(detections),
+            "ts": int(time.time() * 1000)
+        })
+        
+        # Build detection summary for log
+        class_counts = {}
+        for d in detections:
+            cls = d.get("class", "Unknown")
+            class_counts[cls] = class_counts.get(cls, 0) + 1
+        summary = ", ".join(f"{count} {cls}" for cls, count in class_counts.items())
+        print(f"[intruder] User {current_user.email} - detected {summary}, alert_id={alert_id}")
+    
+    return {
+        "intruder_detected": len(detections) > 0,
+        "detections": detections,
+        "alert_id": alert_id,
+        "detection_count": len(detections),
+        "detector_type": detector_type
+    }
 
 
 # Socket.IO events

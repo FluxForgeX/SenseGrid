@@ -9,3 +9,10 @@ aiofiles==23.2.1
 sqlalchemy==2.0.23
 alembic==1.12.1
 
+# Intruder Detection - Roboflow Cloud API (PRIMARY)
+inference-sdk
+
+# Intruder Detection - Local YOLO (ALTERNATIVE - requires best.pt model)
+# ultralytics
+# opencv-python
+
