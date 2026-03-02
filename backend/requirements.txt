@@ -13,6 +13,10 @@ alembic==1.12.1
 inference-sdk
 
 # Intruder Detection - Local YOLO (ALTERNATIVE - requires best.pt model)
-# ultralytics
-# opencv-python
+ultralytics
+opencv-python
+
+# Face Recognition (server-side only)
+deepface
+tf-keras
 

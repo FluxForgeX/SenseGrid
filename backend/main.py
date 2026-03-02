@@ -1,4 +1,4 @@
-from fastapi import FastAPI, APIRouter, HTTPException, Depends, status, UploadFile, File
+from fastapi import FastAPI, APIRouter, HTTPException, Depends, status, UploadFile, File, Form
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from pydantic import BaseModel
@@ -467,6 +467,73 @@ async def frontdoor_action(
     return {"status": "ok", "alertId": alert_id, "action": action}
 
 
+# ══════════════════════════════════════════════════════════════
+# Face Recognition Endpoints (Enrollment & Management)
+# ══════════════════════════════════════════════════════════════
+
+@api.post('/faces/enroll')
+async def enroll_face(
+    file: UploadFile = File(...),
+    name: str = Form(...),
+    current_user: User = Depends(get_current_user),
+):
+    """
+    Enroll an authorized person's face.
+    Upload a clear face photo with the person's name.
+    Multiple photos per person improve accuracy.
+    """
+    from services.face_recognizer import get_face_recognizer
+    import cv2
+    import numpy as np
+
+    recognizer = get_face_recognizer()
+
+    content = await file.read()
+    np_arr = np.frombuffer(content, np.uint8)
+    image = cv2.imdecode(np_arr, cv2.IMREAD_COLOR)
+
+    if image is None:
+        raise HTTPException(status_code=400, detail="Invalid image file")
+
+    result = recognizer.enroll_face(name, image)
+
+    if result["status"] == "error":
+        raise HTTPException(status_code=400, detail=result["message"])
+
+    print(f"[faces] User {current_user.email} enrolled face for '{name}' ({result['embeddings_count']} embeddings)")
+    return result
+
+
+@api.get('/faces')
+async def list_enrolled_faces(
+    current_user: User = Depends(get_current_user),
+):
+    """List all enrolled (authorized) persons."""
+    from services.face_recognizer import get_face_recognizer
+
+    recognizer = get_face_recognizer()
+    persons = recognizer.get_enrolled_persons()
+    return {"persons": persons, "count": len(persons)}
+
+
+@api.delete('/faces/{name}')
+async def delete_enrolled_face(
+    name: str,
+    current_user: User = Depends(get_current_user),
+):
+    """Remove an enrolled person and all their face embeddings."""
+    from services.face_recognizer import get_face_recognizer
+
+    recognizer = get_face_recognizer()
+    deleted = recognizer.delete_person(name)
+
+    if not deleted:
+        raise HTTPException(status_code=404, detail=f"Person '{name}' not found")
+
+    print(f"[faces] User {current_user.email} deleted enrolled face '{name}'")
+    return {"status": "ok", "deleted": name}
+
+
 # Intruder detection endpoint
 @api.post('/intruder/detect')
 async def detect_intruder(
@@ -535,7 +602,25 @@ async def detect_intruder(
         
         # Run detection using configured detector
         detections = detector.detect(temp_path, conf=0.5)
-        
+
+        # ── Face recognition pass ──
+        # Skipped automatically on Raspberry Pi if DeepFace is not installed
+        import cv2
+        from services.face_recognizer import get_face_recognizer, DEEPFACE_AVAILABLE
+        frame = cv2.imread(temp_path)
+        if frame is not None and detections:
+            recognizer = get_face_recognizer()
+            for det in detections:
+                bbox = det.get("bbox")
+                if bbox:
+                    face_result = recognizer.detect_and_recognize_faces(frame, bbox)
+                    det["face"] = face_result
+        elif not DEEPFACE_AVAILABLE:
+            # Pi mode: tag all detections so frontend knows why
+            for det in detections:
+                det["face"] = {"status": "unavailable", "face_found": False,
+                               "recognized": False, "name": None, "similarity": 0.0}
+
     except Exception as e:
         # Clean up temp file if it exists
         if 'temp_path' in locals() and os.path.exists(temp_path):
@@ -548,12 +633,23 @@ async def detect_intruder(
         # Always clean up temp file
         if 'temp_path' in locals() and os.path.exists(temp_path):
             os.remove(temp_path)
-    
-    # If humans detected, create alert and emit Socket.IO event
+
+    # Filter: only intruders trigger alerts
+    # - "authorized"  → skip (known person)
+    # - "unavailable" → alert (Pi mode, no face recognition, treat all as intruder)
+    # - "intruder" / "no_face" / "no_enrolled" → alert
+    intruder_detections = []
+    for det in detections:
+        face = det.get("face", {})
+        if face.get("status") == "authorized":
+            continue  # Known person — no alert
+        intruder_detections.append(det)
+
+    # If intruders detected, create alert and emit Socket.IO event
     alert_id = None
-    if detections:
+    if intruder_detections:
         alert_id = f"alert-{int(time.time() * 1000)}"
-        
+
         # Save alert to database
         new_alert = AlertDB(
             alert_id=alert_id,
@@ -565,27 +661,25 @@ async def detect_intruder(
         )
         db.add(new_alert)
         db.commit()
-        
+
         # Emit Socket.IO event to notify clients
         await sio.emit('intruder:alert', {
             "alertId": alert_id,
             "homeId": current_user.email,
-            "confidence": detections[0]["confidence"],
-            "detectionCount": len(detections),
+            "confidence": intruder_detections[0]["confidence"],
+            "detectionCount": len(intruder_detections),
             "ts": int(time.time() * 1000)
         })
-        
+
         # Build detection summary for log
-        class_counts = {}
-        for d in detections:
-            cls = d.get("class", "Unknown")
-            class_counts[cls] = class_counts.get(cls, 0) + 1
-        summary = ", ".join(f"{count} {cls}" for cls, count in class_counts.items())
-        print(f"[intruder] User {current_user.email} - detected {summary}, alert_id={alert_id}")
-    
+        statuses = [d.get("face", {}).get("status", "unknown") for d in intruder_detections]
+        print(f"[intruder] User {current_user.email} - {len(intruder_detections)} intruder(s) "
+              f"(statuses: {statuses}), alert_id={alert_id}")
+
     return {
-        "intruder_detected": len(detections) > 0,
-        "detections": detections,
+        "intruder_detected": len(intruder_detections) > 0,
+        "detections": detections,  # All detections (incl. authorized) for transparency
+        "intruder_count": len(intruder_detections),
         "alert_id": alert_id,
         "detection_count": len(detections),
         "detector_type": detector_type
