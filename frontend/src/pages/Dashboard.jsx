@@ -1,10 +1,11 @@
 import React, { useState, useEffect } from 'react'
 import RoomGrid from '../components/RoomGrid'
+import CameraFeed from '../components/CameraFeed'
 import NotificationBell from '../components/NotificationBell'
 import useOnlineStatus from '../hooks/useOnlineStatus'
 import useStore from '../store/useStore'
 import { useNavigate } from 'react-router-dom'
-import { FaPlus, FaSignOutAlt } from 'react-icons/fa'
+import { FaPlus, FaSignOutAlt, FaVideo, FaVideoSlash } from 'react-icons/fa'
 import { motion, AnimatePresence } from 'framer-motion'
 import { fetchRooms, createRoom } from '../services/api'
 import { toast } from 'react-toastify'
@@ -16,6 +17,7 @@ export default function Dashboard() {
   const [isAddingRoom, setIsAddingRoom] = useState(false)
   const [newRoomName, setNewRoomName] = useState('')
   const [loading, setLoading] = useState(true)
+  const [showCamera, setShowCamera] = useState(true)
 
   useEffect(() => {
     loadRooms()
@@ -94,13 +96,37 @@ export default function Dashboard() {
       <main className="max-w-7xl mx-auto p-4">
         <div className="flex justify-between items-center mb-6">
           <h2 className="text-2xl font-bold text-gray-800">My Home</h2>
-          <button 
-            onClick={() => setIsAddingRoom(true)}
-            className="flex items-center gap-2 bg-teal-500 hover:bg-teal-600 text-white px-4 py-2 rounded-lg transition shadow-md"
-          >
-            <FaPlus /> Add Room
-          </button>
+          <div className="flex items-center gap-2">
+            <button 
+              onClick={() => setShowCamera(!showCamera)}
+              className={`flex items-center gap-2 px-4 py-2 rounded-lg transition shadow-md ${showCamera ? 'bg-gray-200 text-gray-700 hover:bg-gray-300' : 'bg-teal-500 text-white hover:bg-teal-600'}`}
+              title={showCamera ? 'Hide camera' : 'Show camera'}
+            >
+              {showCamera ? <FaVideoSlash /> : <FaVideo />}
+              <span className="hidden sm:inline">{showCamera ? 'Hide Camera' : 'Show Camera'}</span>
+            </button>
+            <button 
+              onClick={() => setIsAddingRoom(true)}
+              className="flex items-center gap-2 bg-teal-500 hover:bg-teal-600 text-white px-4 py-2 rounded-lg transition shadow-md"
+            >
+              <FaPlus /> <span className="hidden sm:inline">Add Room</span>
+            </button>
+          </div>
         </div>
+
+        {/* Camera Feed Section */}
+        <AnimatePresence>
+          {showCamera && (
+            <motion.div
+              initial={{ opacity: 0, height: 0 }}
+              animate={{ opacity: 1, height: 'auto' }}
+              exit={{ opacity: 0, height: 0 }}
+              className="mb-6 overflow-hidden"
+            >
+              <CameraFeed className="max-w-2xl mx-auto" />
+            </motion.div>
+          )}
+        </AnimatePresence>
 
         <AnimatePresence>
           {isAddingRoom && (

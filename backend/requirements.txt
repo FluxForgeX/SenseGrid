@@ -8,6 +8,7 @@ python-socketio==5.10.0
 aiofiles==23.2.1
 sqlalchemy==2.0.23
 alembic==1.12.1
+httpx>=0.25.0
 
 # Intruder Detection - Roboflow Cloud API (PRIMARY)
 inference-sdk
@@ -15,4 +16,11 @@ inference-sdk
 # Intruder Detection - Local YOLO (ALTERNATIVE - requires best.pt model)
 # ultralytics
 # opencv-python
+
+# Intruder Detection - TFLite (RECOMMENDED for Raspberry Pi)
+# Lightweight runtime (~2MB vs 400MB+ for full TensorFlow)
+# Uncomment for Raspberry Pi deployment:
+# tflite-runtime>=2.14.0
+# numpy
+# opencv-python-headless
 

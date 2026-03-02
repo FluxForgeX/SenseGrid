@@ -64,7 +64,14 @@ class ActionControllerConfig:
 @dataclass
 class DetectionConfig:
     """Intruder detection settings."""
-    confidence_threshold: float = float(os.getenv("DETECTION_CONFIDENCE", "0.5"))
+    # Detector type: 'roboflow' (cloud), 'local' (PyTorch YOLO), 'tflite' (Raspberry Pi)
+    detector_type: str = os.getenv("DETECTOR_TYPE", "roboflow")
+    
+    # Model path for local/tflite detectors
+    # Default: backend/models/best.pt (local) or backend/models/best_int8.tflite (tflite)
+    model_path: Optional[str] = os.getenv("DETECTOR_MODEL_PATH", None)
+    
+    confidence_threshold: float = float(os.getenv("DETECTOR_CONFIDENCE", "0.5"))
     alert_cooldown: float = float(os.getenv("ALERT_COOLDOWN", "60.0"))
     target_classes: List[str] = field(default_factory=lambda: ["Human"])
     

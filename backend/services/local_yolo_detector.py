@@ -64,7 +64,7 @@ class LocalYOLODetector(IntruderDetector):
         self.model = YOLO(str(self.model_path))
         print(f"✅ Local YOLO detector loaded from {self.model_path}")
     
-    def detect(self, image_path: str, conf=0.5, iou=0.35) -> List[Dict[str, Any]]:
+    def detect(self, image_path: str, conf=0.35, iou=0.45) -> List[Dict[str, Any]]:
         """
         Runs intruder detection on a single image file.
         
@@ -122,20 +122,20 @@ class LocalYOLODetector(IntruderDetector):
         
         return self.detect_from_frame(image, conf=conf, iou=iou)
     
-    def detect_from_frame(self, frame, conf=0.5, iou=0.35):
+    def detect_from_frame(self, frame, conf=0.35, iou=0.45):
         """
         Runs intruder detection on a numpy array (video frame).
         
         Args:
             frame: OpenCV image (numpy array)
-            conf: Confidence threshold (default 0.5)
-            iou: IoU threshold for NMS (default 0.35)
+            conf: Confidence threshold (default 0.35)
+            iou: IoU threshold for NMS (default 0.45)
         
         Returns:
             List of Human detections (same format as detect_from_image)
         """
-        # Run YOLO inference
-        results = self.model(frame, conf=conf, iou=iou, verbose=False)
+        # Run YOLO inference at native 640px with test-time augmentation
+        results = self.model(frame, conf=conf, iou=iou, imgsz=640, augment=True, verbose=False)
         
         detections = []
         
@@ -154,7 +154,7 @@ class LocalYOLODetector(IntruderDetector):
         
         return detections
     
-    def detect_with_visualization(self, image_path: str, conf=0.5, iou=0.35):
+    def detect_with_visualization(self, image_path: str, conf=0.35, iou=0.45):
         """
         Detect humans and return annotated image.
         
@@ -170,7 +170,7 @@ class LocalYOLODetector(IntruderDetector):
         if image is None:
             raise ValueError(f"Image could not be loaded from {image_path}")
         
-        results = self.model(image, conf=conf, iou=iou, verbose=False)
+        results = self.model(image, conf=conf, iou=iou, imgsz=640, augment=True, verbose=False)
         
         detections = []
         annotated_frame = image.copy()

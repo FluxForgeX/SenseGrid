@@ -3,10 +3,11 @@ Local webcam test for intruder detection.
 Used only for development on Windows laptop.
 
 This script opens your webcam and runs real-time intruder detection
-using the trained YOLO model (best.pt).
+using TFLite model (best_int8.tflite) or YOLO model (best.pt).
 
 Usage:
-    python services/webcam_test.py
+    python services/webcam_test.py              # Uses TFLite (default)
+    python services/webcam_test.py --detector local   # Uses PyTorch YOLO
 
 Controls:
     - Press 'q' to quit
@@ -15,10 +16,27 @@ Controls:
 
 Requirements:
     - Webcam must be accessible (usually index 0)
-    - best.pt model must be in backend/models/
+    - Model file in backend/models/ (best_int8.tflite or best.pt)
 """
 
-from intruder_detector import get_detector
+import os
+import sys
+
+# Add parent directory to path for imports when running as script
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+# Default to TFLite detector for Raspberry Pi compatibility
+DETECTOR_TYPE = os.getenv("DETECTOR_TYPE", "tflite")
+
+# Use command line arg if provided
+if len(sys.argv) > 2 and sys.argv[1] == "--detector":
+    DETECTOR_TYPE = sys.argv[2]
+
+# Import detector based on type
+if DETECTOR_TYPE == "tflite":
+    from services.tflite_detector import get_detector
+else:
+    from services.local_yolo_detector import get_detector
 import cv2
 import time
 

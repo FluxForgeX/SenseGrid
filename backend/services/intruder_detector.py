@@ -85,8 +85,14 @@ class DetectorFactory:
     Factory class to create detector instances based on configuration.
     
     Usage:
-        detector = DetectorFactory.create('roboflow')
-        detector = DetectorFactory.create('local')
+        detector = DetectorFactory.create('roboflow')  # Cloud API
+        detector = DetectorFactory.create('local')     # Local PyTorch YOLO
+        detector = DetectorFactory.create('tflite')    # TFLite (Raspberry Pi optimized)
+    
+    Environment:
+        DETECTOR_TYPE: 'roboflow', 'local', or 'tflite'
+        DETECTOR_MODEL_PATH: Path to model file (for local/tflite)
+        DETECTOR_CONFIDENCE: Default confidence threshold (0.0-1.0)
     """
     
     _detectors = {}

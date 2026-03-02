@@ -1,7 +1,7 @@
 # SenseGrid - AI Coding Agent Instructions
 
 ## Project Overview
-**SenseGrid** is a mobile-first Progressive Web App (PWA) for controlling IoT room sensors with real-time updates and offline-first architecture. The app uses **optimistic UI updates** and **IndexedDB-backed offline queue** to ensure responsive UX even when disconnected.
+**SenseGrid** is a mobile-first React web application for controlling IoT room sensors with real-time updates and offline-first architecture. The app uses **optimistic UI updates** and **IndexedDB-backed offline queue** to ensure responsive UX even when disconnected.
 
 **Stack**: React 18 + Vite, FastAPI backend, Socket.IO for real-time updates, Zustand for state, Tailwind CSS
 
@@ -99,11 +99,6 @@ npm run dev  # Runs on http://localhost:5174
 5. Re-enable network → Queue auto-flushes
 
 See `OFFLINE_QUEUE.md` for full debugging commands.
-
-### PWA & Service Worker
-- Vite PWA plugin auto-generates service worker
-- Custom SW in `frontend/sw.js` handles background sync
-- Test PWA: `npm run build && npm run preview`, then use Lighthouse in DevTools
 
 ## Code Conventions
 

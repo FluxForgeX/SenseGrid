@@ -1,6 +1,7 @@
-from fastapi import FastAPI, APIRouter, HTTPException, Depends, status, UploadFile, File
+from fastapi import FastAPI, APIRouter, HTTPException, Depends, status, UploadFile, File, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from typing import Optional, Dict, List
 from datetime import datetime, timedelta
@@ -13,6 +14,7 @@ from dotenv import load_dotenv
 import socketio
 import time
 import tempfile
+import httpx
 
 # Import database models and utilities
 from database import User, Room as RoomDB, Alert as AlertDB, get_db, init_db
@@ -505,8 +507,11 @@ async def detect_intruder(
         elif detector_type in ("local", "yolo"):
             from services.local_yolo_detector import get_detector
             detector = get_detector()
+        elif detector_type in ("tflite", "tflite-int8"):
+            from services.tflite_detector import get_detector
+            detector = get_detector()
         else:
-            raise ValueError(f"Unknown DETECTOR_TYPE: {detector_type}. Use 'roboflow' or 'local'")
+            raise ValueError(f"Unknown DETECTOR_TYPE: {detector_type}. Use 'roboflow', 'local', or 'tflite'")
             
     except ImportError as e:
         raise HTTPException(
@@ -590,6 +595,111 @@ async def detect_intruder(
         "detection_count": len(detections),
         "detector_type": detector_type
     }
+
+
+# ============ CAMERA STREAMING ============
+
+# ESP32-CAM URLs from environment
+ESP32_CAM_STREAM_URL = os.getenv("ESP32_CAM_STREAM_URL", "http://192.168.1.100/stream")
+ESP32_CAM_CAPTURE_URL = os.getenv("ESP32_CAM_URL", "http://192.168.1.100/capture")
+
+
+async def get_current_user_optional(
+    credentials: HTTPAuthorizationCredentials = Depends(security),
+    db: Session = Depends(get_db)
+) -> Optional[User]:
+    """Get current user if authenticated, otherwise return None."""
+    if not credentials:
+        return None
+    try:
+        payload = jwt.decode(credentials.credentials, JWT_SECRET, algorithms=[JWT_ALGORITHM])
+        email = payload.get("sub")
+        if not email:
+            return None
+        user = db.query(User).filter(User.email == email).first()
+        return user
+    except JWTError:
+        return None
+
+
+@api.get('/camera/stream')
+async def camera_stream(
+    token: str = Query(None, description="JWT token for authentication"),
+    db: Session = Depends(get_db)
+):
+    """
+    Proxy MJPEG stream from ESP32-CAM with authentication.
+    
+    Usage in frontend:
+        <img src="/api/camera/stream?token=YOUR_JWT_TOKEN" />
+    """
+    # Validate token from query param (needed for <img> tags)
+    if token:
+        try:
+            payload = jwt.decode(token, JWT_SECRET, algorithms=[JWT_ALGORITHM])
+            email = payload.get("sub")
+            if not email:
+                raise HTTPException(status_code=401, detail="Invalid token")
+        except JWTError:
+            raise HTTPException(status_code=401, detail="Invalid token")
+    else:
+        raise HTTPException(status_code=401, detail="Authentication required. Add ?token=YOUR_TOKEN")
+    
+    async def generate():
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            try:
+                async with client.stream('GET', ESP32_CAM_STREAM_URL) as response:
+                    async for chunk in response.aiter_bytes(chunk_size=1024):
+                        yield chunk
+            except httpx.ConnectError:
+                yield b'--frame\r\nContent-Type: text/plain\r\n\r\nCamera not available\r\n'
+            except Exception as e:
+                print(f"[camera] Stream error: {e}")
+                yield b''
+    
+    return StreamingResponse(
+        generate(),
+        media_type="multipart/x-mixed-replace; boundary=frame"
+    )
+
+
+@api.get('/camera/snapshot')
+async def camera_snapshot(current_user: User = Depends(get_current_user)):
+    """
+    Get a single JPEG frame from ESP32-CAM.
+    Returns the raw JPEG image.
+    """
+    async with httpx.AsyncClient(timeout=10.0) as client:
+        try:
+            response = await client.get(ESP32_CAM_CAPTURE_URL)
+            response.raise_for_status()
+            return StreamingResponse(
+                iter([response.content]),
+                media_type="image/jpeg"
+            )
+        except httpx.ConnectError:
+            raise HTTPException(status_code=503, detail="Camera not available")
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=f"Camera error: {str(e)}")
+
+
+@api.get('/camera/status')
+async def camera_status(current_user: User = Depends(get_current_user)):
+    """Check if ESP32-CAM is reachable."""
+    async with httpx.AsyncClient(timeout=5.0) as client:
+        try:
+            response = await client.head(ESP32_CAM_CAPTURE_URL)
+            return {
+                "status": "online",
+                "url": ESP32_CAM_CAPTURE_URL,
+                "stream_url": ESP32_CAM_STREAM_URL
+            }
+        except:
+            return {
+                "status": "offline",
+                "url": ESP32_CAM_CAPTURE_URL,
+                "stream_url": ESP32_CAM_STREAM_URL
+            }
 
 
 # Socket.IO events

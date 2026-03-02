@@ -58,7 +58,7 @@ npm run preview      # Preview production build
 
 ```bash
 cd backend
-python -m venv .venv311
+python -3.11 -m venv .venv311
 source .venv311/bin/activate  # Linux/Mac
 # or: .venv311\Scripts\Activate.ps1  # Windows PowerShell
 pip install -r requirements.txt

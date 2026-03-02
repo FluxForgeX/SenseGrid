@@ -80,14 +80,19 @@ class WebcamService:
         
         self._running = False
         self._thread: Optional[threading.Thread] = None
+        self._preview_thread: Optional[threading.Thread] = None
         self._cap: Optional[cv2.VideoCapture] = None
         self._detector = None
         self._last_alert_time: float = 0
         self._frame_count: int = 0
         self._detection_count: int = 0
-        
+        self._frames_with_detection: int = 0
+        self._start_time: float = 0
+        self._fps: float = 0.0
+
         self._preview_enabled = False
-        self._latest_frame = None
+        self._preview_frame = None          # latest raw frame (updated at camera fps)
+        self._preview_lock = threading.Lock()
         self._latest_detections: List[Detection] = []
         self._lock = threading.Lock()
     
@@ -122,16 +127,37 @@ class WebcamService:
         print(f"[webcam] ✅ Camera opened: {actual_w}x{actual_h}")
         return True
     
+    def _preview_loop(self):
+        """Fast camera-read loop (~30fps). Owns the camera handle."""
+        fps_count = 0
+        fps_timer = time.time()
+
+        while self._running:
+            if self._cap is None or not self._cap.isOpened():
+                time.sleep(0.05)
+                continue
+
+            ret, frame = self._cap.read()
+            if not ret:
+                time.sleep(0.01)
+                continue
+
+            with self._preview_lock:
+                self._preview_frame = frame
+
+            fps_count += 1
+            now = time.time()
+            if now - fps_timer >= 1.0:
+                self._fps = fps_count / (now - fps_timer)
+                fps_count = 0
+                fps_timer = now
+
     def _capture_frame(self) -> Optional[Any]:
-        """Capture a single frame from the camera."""
-        if self._cap is None or not self._cap.isOpened():
-            return None
-        
-        ret, frame = self._cap.read()
-        if not ret:
-            print("[webcam] ⚠️ Failed to capture frame")
-            return None
-        
+        """Grab latest frame from the preview thread (non-blocking)."""
+        with self._preview_lock:
+            if self._preview_frame is None:
+                return None
+            frame = self._preview_frame.copy()
         self._frame_count += 1
         return frame
     
@@ -209,21 +235,29 @@ class WebcamService:
         return event
     
     def _capture_loop(self):
-        """Main capture loop running in background thread."""
-        print(f"[webcam] 🎥 Starting capture loop (interval={self.config.capture_interval}s, cooldown={self.config.alert_cooldown}s)")
-        
+        """Detection loop - runs inference at capture_interval, decoupled from camera fps."""
+        print(f"[webcam] 🎥 Starting detection loop (interval={self.config.capture_interval}s, cooldown={self.config.alert_cooldown}s)")
+        self._start_time = time.time()
+
+        # Wait for preview thread to deliver first frame
+        while self._running:
+            with self._preview_lock:
+                ready = self._preview_frame is not None
+            if ready:
+                break
+            time.sleep(0.05)
+
         while self._running:
             loop_start = time.time()
-            
+
             frame = self._capture_frame()
             if frame is None:
-                time.sleep(1)
+                time.sleep(0.1)
                 continue
-            
+
             all_detections = self._run_detection(frame)
-            
+
             with self._lock:
-                self._latest_frame = frame.copy()
                 self._latest_detections = all_detections
             
             if self.on_detection and all_detections:
@@ -233,6 +267,9 @@ class WebcamService:
                     print(f"[webcam] ⚠️ Detection callback error: {e}")
             
             target_detections = self._filter_target_detections(all_detections)
+            
+            if target_detections:
+                self._frames_with_detection += 1
             
             if target_detections and self._check_cooldown():
                 self._trigger_alert(target_detections, frame)
@@ -267,9 +304,15 @@ class WebcamService:
             return False
         
         self._running = True
+
+        # Fast preview thread - reads camera at full fps
+        self._preview_thread = threading.Thread(target=self._preview_loop, daemon=True)
+        self._preview_thread.start()
+
+        # Detection thread - runs inference at capture_interval
         self._thread = threading.Thread(target=self._capture_loop, daemon=True)
         self._thread.start()
-        
+
         print("[webcam] ✅ Service started")
         return True
     
@@ -280,30 +323,41 @@ class WebcamService:
         
         print("[webcam] Stopping service...")
         self._running = False
-        
+
         if self._thread:
             self._thread.join(timeout=5)
             self._thread = None
-        
+
+        if self._preview_thread:
+            self._preview_thread.join(timeout=3)
+            self._preview_thread = None
+
         if self._cap:
             self._cap.release()
             self._cap = None
-        
+
         print("[webcam] ✅ Service stopped")
     
     def get_latest_frame(self):
-        """Get the latest captured frame (for preview)."""
+        """Get the latest camera frame + most recent detections (for preview)."""
+        with self._preview_lock:
+            frame = self._preview_frame.copy() if self._preview_frame is not None else None
         with self._lock:
-            if self._latest_frame is not None:
-                return self._latest_frame.copy(), self._latest_detections.copy()
-            return None, []
+            detections = self._latest_detections.copy()
+        return frame, detections
     
     def get_stats(self) -> Dict[str, Any]:
         """Get service statistics."""
+        elapsed = time.time() - self._start_time if self._start_time else 0
+        accuracy = (self._frames_with_detection / self._frame_count * 100) if self._frame_count > 0 else 0.0
         return {
             "running": self._running,
             "frame_count": self._frame_count,
             "detection_count": self._detection_count,
+            "frames_with_detection": self._frames_with_detection,
+            "accuracy": accuracy,
+            "elapsed_seconds": elapsed,
+            "fps": round(self._fps, 1),
             "last_alert_time": self._last_alert_time,
             "config": {
                 "camera_index": self.config.camera_index,
@@ -325,11 +379,15 @@ def draw_detections(frame, detections: List[Detection], target_classes: List[str
     
     for det in detections:
         bbox = det.bbox
-        x, y = bbox.get("x", 0), bbox.get("y", 0)
-        w, h = bbox.get("width", 0), bbox.get("height", 0)
-        
-        x1, y1 = int(x - w / 2), int(y - h / 2)
-        x2, y2 = int(x + w / 2), int(y + h / 2)
+        if isinstance(bbox, list):
+            # Local YOLO format: [x1, y1, x2, y2]
+            x1, y1, x2, y2 = int(bbox[0]), int(bbox[1]), int(bbox[2]), int(bbox[3])
+        else:
+            # Roboflow format: {"x": cx, "y": cy, "width": w, "height": h}
+            x, y = bbox.get("x", 0), bbox.get("y", 0)
+            w, h = bbox.get("width", 0), bbox.get("height", 0)
+            x1, y1 = int(x - w / 2), int(y - h / 2)
+            x2, y2 = int(x + w / 2), int(y + h / 2)
         
         color = (0, 255, 0) if det.class_name in target_classes else (0, 255, 255)
         

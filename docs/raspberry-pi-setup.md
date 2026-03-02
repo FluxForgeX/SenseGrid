@@ -253,3 +253,83 @@ humidity = dht.humidity
 ```
 
 See `docs/hardware-integration.md` for detailed sensor setup.
+
+## 🎯 Intruder Detection with TFLite (Recommended)
+
+The TFLite detector is optimized for Raspberry Pi with INT8 quantized model (~3MB, fast inference).
+
+### 1. Install TFLite Dependencies
+
+```bash
+cd ~/SenseGrid/backend
+source .venv/bin/activate
+
+# Install tflite-runtime (lightweight, Pi-optimized)
+pip install tflite-runtime numpy opencv-python-headless
+```
+
+**Note:** Use `opencv-python-headless` on Pi (no GUI needed for server mode).
+
+### 2. Configure Environment
+
+Edit `backend/.env`:
+```bash
+# Use TFLite detector (recommended for Pi)
+DETECTOR_TYPE=tflite
+
+# Optional: custom model path (default: backend/models/best_int8.tflite)
+# DETECTOR_MODEL_PATH=/path/to/your/model.tflite
+
+# Detection confidence threshold
+DETECTOR_CONFIDENCE=0.5
+```
+
+### 3. Verify Model File Exists
+
+```bash
+ls -la ~/SenseGrid/backend/models/best_int8.tflite
+# Should show ~3MB file
+```
+
+### 4. Test Detection
+
+```bash
+cd ~/SenseGrid/backend
+source .venv/bin/activate
+python -c "from services.tflite_detector import get_detector; d = get_detector(); print('✅ TFLite ready!')"
+```
+
+Expected output:
+```
+✅ TFLite detector loaded: best_int8.tflite
+   Input shape: [1, 416, 416, 3], dtype: int8
+   Quantized: True
+✅ TFLite ready!
+```
+
+### 5. Run with ESP32-CAM or USB Webcam
+
+**Option A: ESP32-CAM (recommended for Pi headless)**
+```bash
+# Configure ESP32-CAM URL in .env
+ESP32_CAM_URL=http://192.168.1.XX/capture
+
+# Run the main Pi service
+python hardware/pi_main.py
+```
+
+**Option B: USB Webcam**
+```bash
+# Test with webcam
+python services/webcam_test.py
+```
+
+### TFLite vs Other Detectors
+
+| Feature | TFLite (Pi) | Local YOLO | Roboflow Cloud |
+|---------|-------------|------------|----------------|
+| **RAM Usage** | ~50 MB | ~300 MB | ~30 MB |
+| **Model Size** | 3 MB | 12 MB | None (cloud) |
+| **Internet** | ❌ Not needed | ❌ Not needed | ✅ Required |
+| **Speed (Pi 4)** | ~200-400ms | ~500ms+ | ~300-500ms |
+| **Best For** | **Raspberry Pi** | Desktop+GPU | Cloud/Desktop |
