@@ -20,6 +20,7 @@ opencv-python
 # Face Recognition (server-side only)
 deepface
 tf-keras
+werkzeug
 
 # Intruder Detection - TFLite (RECOMMENDED for Raspberry Pi)
 # Lightweight runtime (~2MB vs 400MB+ for full TensorFlow)

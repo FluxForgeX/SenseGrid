@@ -144,13 +144,11 @@ class LocalYOLODetector(IntruderDetector):
                 class_id = int(box.cls[0])
                 label = self.model.names[class_id]
                 
-                # Only return Human detections
-                if label == "Human":
-                    detections.append({
-                        "class": label,
-                        "confidence": float(box.conf[0]),
-                        "bbox": box.xyxy[0].tolist()  # [x1, y1, x2, y2]
-                    })
+                detections.append({
+                    "class": label,
+                    "confidence": float(box.conf[0]),
+                    "bbox": box.xyxy[0].tolist()  # [x1, y1, x2, y2]
+                })
         
         return detections
     

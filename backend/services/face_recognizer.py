@@ -119,16 +119,28 @@ class FaceRecognizer:
         """
         self._ensure_initialized()
 
-        # Extract embedding from the face image
+        # Extract embedding from the face image (with graceful fallback for angles)
+        result = None
         try:
             result = self._deepface.represent(
                 img_path=image,
                 model_name="ArcFace",
                 detector_backend="opencv",
-                enforce_detection=True,
+                enforce_detection=False,
             )
-        except Exception as e:
-            return {"status": "error", "message": f"No face detected: {e}"}
+        except Exception:
+            pass
+
+        if not result:
+            try:
+                result = self._deepface.represent(
+                    img_path=image,
+                    model_name="ArcFace",
+                    detector_backend="skip",
+                    enforce_detection=False,
+                )
+            except Exception as e:
+                return {"status": "error", "message": f"No face detected: {e}"}
 
         if not result:
             return {"status": "error", "message": "No face found in image"}
